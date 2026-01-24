@@ -73,6 +73,7 @@ static_library("utility") {
     "//third_party/blink/public/common",
     "//third_party/zlib/google:zip",
     "//ui/base:buildflags",
+    "//xenon_overlay/services:xenon_service",
   ]
 
   if (is_win) {

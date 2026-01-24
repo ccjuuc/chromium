@@ -1,0 +1,9 @@
+# Copyright 2024 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+declare_args() {
+  # Xenon Overlay Service is enabled on Windows, Linux, and Mac.
+  # ChromeOS and Android are not currently supported targets for this overlay.
+  enable_xenon_service = is_win || is_linux || is_mac
+}

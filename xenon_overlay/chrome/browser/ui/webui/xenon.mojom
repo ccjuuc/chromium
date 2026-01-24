@@ -1,0 +1,11 @@
+module xenon.mojom;
+
+// Browser-side handler for requests from WebUI page.
+interface PageHandler {
+  // Requests the browser to close the overlay.
+  // Requests the browser to close the overlay.
+  Close();
+
+  // Connects to the Xenon service.
+  ConnectToService() => (bool success, string message);
+};

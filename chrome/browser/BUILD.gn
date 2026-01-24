@@ -43,6 +43,7 @@ import("//third_party/webrtc/webrtc.gni")
 import("//third_party/widevine/cdm/widevine.gni")
 import("//tools/grit/grit_rule.gni")
 import("//ui/base/ui_features.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 assert(enable_supervised_users)
 
@@ -2598,7 +2599,12 @@ static_library("browser") {
     # TODO(crbug.com/432061436): Remove this dependency when c/b/password_manager gets
     # componentized.
     "//chrome/browser/ui/webauthn:impl",
+    "//xenon_overlay/buildflags:buildflags",
   ]
+
+  if (enable_xenon_service) {
+    deps += [ "//xenon_overlay/chrome/browser:browser" ]
+  }
 
   if (!is_android) {
     deps += [

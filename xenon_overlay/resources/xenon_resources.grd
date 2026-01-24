@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<grit base_dir="." latest_public_release="0" current_release="1"
+      source_lang_id="en" enc_check="möl">
+  <outputs>
+    <output filename="grit/xenon_resources.h" type="rc_header">
+      <emit emit_type='prepend'></emit>
+    </output>
+    <output filename="xenon_resources.pak"
+            type="data_package" lang="en" />
+  </outputs>
+  <release seq="1">
+    <includes>
+      <include name="IDR_XENON_WEBUI_INDEX_HTML" file="webui/index.html" type="BINDATA" />
+      <include name="IDR_XENON_WEBUI_INDEX_CSS" file="webui/index.css" type="BINDATA" />
+      <include name="IDR_XENON_WEBUI_INDEX_JS" file="${root_gen_dir}/xenon_overlay/resources/webui/tsc/index.js" use_base_dir="false" type="BINDATA" />
+      <include name="IDR_XENON_WEBUI_XENON_MOJOM_WEBUI_JS" file="${root_gen_dir}/xenon_overlay/resources/webui/tsc/xenon.mojom-webui.js" use_base_dir="false" type="BINDATA" />
+    </includes>
+  </release>
+</grit>

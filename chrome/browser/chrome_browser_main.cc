@@ -330,6 +330,12 @@
 #include "chrome/browser/chrome_browser_main_extra_parts_ozone.h"
 #endif
 
+// Xenon Overlay
+#include "xenon_overlay/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/xenon_browser_main_extra_parts.h"
+#endif
+
 namespace {
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || \
@@ -795,6 +801,10 @@ std::unique_ptr<content::BrowserMainParts> ChromeBrowserMainParts::Create(
 
   main_parts->AddParts(
       std::make_unique<ChromeBrowserMainExtraPartsSegmentationPlatform>());
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  main_parts->AddParts(std::make_unique<XenonBrowserMainExtraParts>());
+#endif
 
   return main_parts;
 }

@@ -16,6 +16,7 @@ import("//testing/test.gni")
 import("//third_party/skia/gn/shared_sources.gni")
 import("//third_party/skia/modules/pathops/pathops.gni")
 import("//third_party/skia/modules/skcms/skcms.gni")
+import("//third_party/skia/modules/svg/svg.gni")
 import("features.gni")
 
 if (current_cpu == "arm") {
@@ -608,6 +609,12 @@ component("skia") {
       "SKOTTIE_TRIVIAL_FONTRUN_ITER",
     ]
   }
+
+  # Enable SVG module (custom addition for Xenon)
+  public += skia_svg_renderer_public
+  sources += skia_svg_renderer_sources
+  sources -= [ "//third_party/skia/modules/svg/src/SkSVGOpenTypeSVGDecoder.cpp" ]
+  defines += [ "SK_ENABLE_SVG" ]
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
   # enable the diagnostic by removing this line.

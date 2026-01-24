@@ -1,0 +1,23 @@
+import("//tools/grit/grit_rule.gni")
+
+grit("resources_grit") {
+  source = "xenon_resources.grd"
+  outputs = [
+    "grit/xenon_resources.h",
+    "xenon_resources.pak",
+  ]
+  deps = [ "webui:resources" ]
+}
+
+copy("copy_pak") {
+  sources = [ "$target_gen_dir/xenon_resources.pak" ]
+  outputs = [ "$root_out_dir/xenon_resources.pak" ]
+  deps = [ ":resources_grit" ]
+}
+
+group("resources") {
+  public_deps = [
+    ":resources_grit",
+    ":copy_pak",
+  ]
+}

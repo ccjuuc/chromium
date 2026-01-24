@@ -1,0 +1,13 @@
+source_set("xenon_service") {
+  sources = [
+    "xenon_service_impl.cc",
+    "xenon_service_impl.h",
+  ]
+
+  deps = [
+    "//base",
+    "//mojo/public/cpp/bindings",
+    "//services/network/public/cpp",
+    "//xenon_overlay/public/mojom",
+  ]
+}

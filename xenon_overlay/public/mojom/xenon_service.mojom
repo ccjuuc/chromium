@@ -1,0 +1,13 @@
+module xenon.mojom;
+
+import "services/network/public/mojom/url_loader_factory.mojom";
+import "sandbox/policy/mojom/sandbox.mojom";
+
+[ServiceSandbox=sandbox.mojom.Sandbox.kUtility]
+interface XenonMainService {
+  // Initialize the service with a URLLoaderFactory to enable network requests.
+  Initialize(pending_remote<network.mojom.URLLoaderFactory> url_loader_factory);
+
+  // Simple ping method for testing
+  Ping() => (string response);
+};

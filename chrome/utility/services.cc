@@ -29,6 +29,8 @@
 #include "printing/buildflags/buildflags.h"
 #include "services/passage_embeddings/passage_embeddings_service.h"
 #include "ui/accessibility/accessibility_features.h"
+#include "xenon_overlay/public/mojom/xenon_service.mojom.h"
+#include "xenon_overlay/services/xenon_service_impl.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/services/system_signals/win/win_system_signals_service.h"
@@ -141,6 +143,11 @@ namespace {
 
 auto RunFilePatcher(mojo::PendingReceiver<patch::mojom::FilePatcher> receiver) {
   return std::make_unique<patch::FilePatcherImpl>(std::move(receiver));
+}
+
+auto RunXenonService(
+    mojo::PendingReceiver<xenon::mojom::XenonMainService> receiver) {
+  return std::make_unique<xenon::XenonServiceImpl>(std::move(receiver));
 }
 
 auto RunUnzipper(mojo::PendingReceiver<unzip::mojom::Unzipper> receiver) {
@@ -433,6 +440,7 @@ void RegisterElevatedMainThreadServices(mojo::ServiceFactory& services) {
 
 void RegisterMainThreadServices(mojo::ServiceFactory& services) {
   services.Add(RunFilePatcher);
+  services.Add(RunXenonService);
   services.Add(RunUnzipper);
   services.Add(RunCSVPasswordParser);
   services.Add(ContentBookmarkParser);

@@ -784,6 +784,14 @@
     "META": {"sizes": {"includes": [60]}},
     "includes": [5280],
   },
+  "<(SHARED_INTERMEDIATE_DIR)/xenon_overlay/resources/webui/resources.grd": {
+    "META": {"sizes": {"includes": [50]}},
+    "includes": [5350],
+  },
+  "xenon_overlay/resources/xenon_resources.grd": {
+    "META": {"sizes": {"includes": [50]}},
+    "includes": [5400],
+  },
   # END chrome/ WebUI resources section
 
   # START chrome/ miscellaneous section.
