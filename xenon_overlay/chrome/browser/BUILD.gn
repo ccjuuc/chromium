@@ -1,0 +1,39 @@
+import("//third_party/skia/modules/svg/svg.gni")
+
+source_set("browser") {
+  defines = []
+  sources = [
+    "xenon_browser_main_extra_parts.cc",
+    "xenon_browser_main_extra_parts.h",
+    "xenon_manager.cc",
+    "xenon_manager.h",
+
+    "ui/xenon_web_dialog.cc",
+    "ui/xenon_web_dialog.h",
+    "ui/webui/xenon_page_handler.cc",
+    "ui/webui/xenon_page_handler.h",
+    "ui/webui/xenon_webui_controller.cc",
+    "ui/webui/xenon_webui_controller.h",
+    "ui/svg_image_source.cc",
+    "ui/svg_image_source.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/ui:ui",
+    "//content/public/browser",
+    "//services/network/public/mojom",
+    "//ui/base",
+    "//ui/display",
+    "//ui/gfx",
+    "//ui/web_dialogs",
+    "//xenon_overlay/public/mojom",
+    "//xenon_overlay/chrome/browser/ui/webui:mojo_bindings",
+    "//xenon_overlay/resources:resources",
+    "//ui/webui",
+    "//mojo/public/cpp/bindings",
+    "//skia",
+    "//third_party/expat",
+  ]
+}
