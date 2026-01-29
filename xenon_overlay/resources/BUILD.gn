@@ -15,9 +15,20 @@ copy("copy_pak") {
   deps = [ ":resources_grit" ]
 }
 
+copy("copy_extension") {
+  sources = [
+    "extension/manifest.json",
+    "extension/index.html",
+    "extension/main.js",
+    "extension/background.js",
+  ]
+  outputs = [ "$root_out_dir/resources/xenon_overlay/extension/{{source_file_part}}" ]
+}
+
 group("resources") {
   public_deps = [
     ":resources_grit",
     ":copy_pak",
+    ":copy_extension",
   ]
 }

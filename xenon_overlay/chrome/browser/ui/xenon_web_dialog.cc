@@ -11,36 +11,53 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
 
-#include "ui/base/models/image_model.h"
-#include "xenon_overlay/chrome/browser/ui/svg_image_source.h"
-
 namespace xenon {
 
 // A custom WebDialogView that supports CSS drag regions (-webkit-app-region: drag).
 class XenonWebDialogView : public views::WebDialogView {
  public:
-// ... constructors ...
   XenonWebDialogView(content::BrowserContext* context,
                      ui::WebDialogDelegate* delegate,
                      std::unique_ptr<WebContentsHandler> handler)
       : views::WebDialogView(context, delegate, std::move(handler)) {}
   ~XenonWebDialogView() override = default;
 
-  // ... (DraggableRegionsChanged, NonClientHitTest, AddedToWidget, CreateClientView, CreateFrameView methods remain same)
+  // content::WebContentsDelegate:
+  void DraggableRegionsChanged(
+      const std::vector<blink::mojom::DraggableRegionPtr>& regions,
+      content::WebContents* contents) override {
+    draggable_region_ = std::make_unique<SkRegion>();
+    for (const auto& region : regions) {
+      draggable_region_->op(gfx::RectToSkIRect(region->bounds),
+                            region->draggable ? SkRegion::kUnion_Op
+                                              : SkRegion::kDifference_Op);
+    }
+  }
 
-  // Override GetWindowIcon to test SvgImageSource
-  ui::ImageModel GetWindowIcon() override {
-    constexpr char kSvgIcon[] =
-        "<svg width=\"256\" height=\"256\" viewBox=\"0 0 24 24\" fill=\"none\" "
-        "xmlns=\"http://www.w3.org/2000/svg\">"
-        "<path d=\"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 "
-        "12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 "
-        "15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z\" fill=\"#00FF00\"/>"
-        "</svg>";
-    
-    gfx::ImageSkia image_skia(std::make_unique<SvgImageSource>(kSvgIcon, 256, std::nullopt),
-                              gfx::Size(256, 256));
-    return ui::ImageModel::FromImageSkia(image_skia);
+  // views::ClientView:
+  int NonClientHitTest(const gfx::Point& point) override {
+    if (draggable_region_ &&
+        draggable_region_->contains(point.x(), point.y())) {
+      return HTCAPTION;
+    }
+    return views::WebDialogView::NonClientHitTest(point);
+  }
+
+  // views::View:
+  void AddedToWidget() override {
+    views::WebDialogView::AddedToWidget();
+    if (web_contents()) {
+      web_contents()->SetSupportsDraggableRegions(true);
+    }
+  }
+
+  views::ClientView* CreateClientView(views::Widget* widget) override {
+    return this;
+  }
+
+  std::unique_ptr<views::FrameView> CreateFrameView(
+      views::Widget* widget) override {
+    return std::make_unique<EmptyFrameView>();
   }
 
   bool ShouldDescendIntoChildForEventHandling(

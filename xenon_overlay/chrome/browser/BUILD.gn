@@ -5,6 +5,8 @@ source_set("browser") {
   sources = [
     "xenon_browser_main_extra_parts.cc",
     "xenon_browser_main_extra_parts.h",
+    "xenon_extension_manager.cc",
+    "xenon_extension_manager.h",
     "xenon_manager.cc",
     "xenon_manager.h",
 
@@ -35,5 +37,7 @@ source_set("browser") {
     "//mojo/public/cpp/bindings",
     "//skia",
     "//third_party/expat",
+    "//extensions/browser",
+    "//extensions/common",
   ]
 }

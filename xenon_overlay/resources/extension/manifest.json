@@ -1,0 +1,21 @@
+{
+  "name": "Xenon Overlay Extension",
+  "version": "1.0",
+  "manifest_version": 3,
+  "description": "Extension based UI for Xenon Overlay",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxK8V5qJ3PQa4jcigI4WumJCiTjYFjRNxHV8d5SbgLM5cCySENvAyghsZ2B0Xz19GgErkJlAfoJURWp71RSou3qhpFN6eWguhrbOlP+uwpeISgPVTAf1kpVhigZZP18DfL4PSCY/04RRWsFAq41R3YHB8EIbcfkQz1H++ZM93SQAA+PnON9933JdjmZOgUBbFKGcz9KGp/fDPjOKTgVCgJFyMfDTdx4mYDziy+/uJIyqUy7gV0GMdR67nHeRATuFC3wHZH93Rs7EP/PdlXB3KbmU8D173YJW4lmQkfcfnrqX/CSM+BnYfiyjmLo7HQ25+kw6RSfptW1SzwuOTzwIDAQAB",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Xenon Overlay",
+    "default_popup": "index.html"
+  },
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "sandbox": {
+    "pages": []
+  }
+}
