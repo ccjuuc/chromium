@@ -22,7 +22,7 @@ copy("copy_extension") {
     "extension/main.js",
     "extension/background.js",
   ]
-  outputs = [ "$root_out_dir/resources/xenon_overlay/extension/{{source_file_part}}" ]
+  outputs = [ "$root_out_dir/resources/xenon_extension/{{source_file_part}}" ]
 }
 
 group("resources") {

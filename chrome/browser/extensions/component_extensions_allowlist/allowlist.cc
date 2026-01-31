@@ -55,6 +55,7 @@ bool IsComponentExtensionAllowlisted(const std::string& extension_id) {
       extension_misc::kTTSEngineExtensionId,
       extension_misc::kComponentUpdaterTTSEngineExtensionId,
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+      "mkkhnfilihmphalmfjjbobdnaikhbeoi",  // Xenon Overlay Extension
   });
 
   if (kAllowed.contains(extension_id)) {

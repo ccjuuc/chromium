@@ -58,16 +58,23 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch("show-xenon-extension")) {
       // Load and register the component extension
       xenon::XenonExtensionManager* extension_manager =
-      xenon::XenonExtensionManager::GetInstance();
-      extensions::ExtensionId extension_id =
-      extension_manager->LoadExtensionFromDefaultPath(profile);
-      if (!extension_id.empty()) {
-      LOG(INFO) << "XenonBrowserMainExtraParts: Component extension loaded with ID: "
-                << extension_id;
+          xenon::XenonExtensionManager::GetInstance();
+      extension_manager->LoadExtensionFromDefaultPath(
+          profile,
+          base::BindOnce(
+              [](content::BrowserContext* context,
+                 const extensions::ExtensionId& extension_id) {
+                if (!extension_id.empty()) {
+                  LOG(INFO) << "XenonBrowserMainExtraParts: Component extension "
+                               "loaded with ID: "
+                            << extension_id;
 
-      // Verify Extension UI by launching it on startup
-      extension_manager->ShowExtension(profile);
-      }
+                  // Verify Extension UI by launching it on startup
+                  xenon::XenonExtensionManager::GetInstance()->ShowExtension(
+                      context);
+                }
+              },
+              profile));
   } else {
       // Register Mojo interfaces for Xenon WebUI
       content::WebUIBrowserInterfaceBrokerRegistry::GetTrustedRegistry()
