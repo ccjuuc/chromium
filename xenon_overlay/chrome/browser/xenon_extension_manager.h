@@ -4,10 +4,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "url/gurl.h"
 #include "base/memory/singleton.h"
 #include "extensions/common/extension_id.h"
 #include "url/gurl.h"
@@ -38,9 +40,15 @@ struct ComponentExtensionConfig {
   // If empty, the ID will be computed from the manifest's key field.
   std::string expected_extension_id;
   
-  // Function to get the built-in extension path.
+  // Function to get the built-in extension path(s).
   // This is typically a path relative to the module directory.
+  // For multiple built-in paths, return the primary one here.
   base::FilePath (*get_builtin_path)();
+  
+  // Optional: Function to get additional built-in extension paths.
+  // Returns a list of alternative built-in paths to check.
+  // If null, only get_builtin_path() will be used.
+  std::vector<base::FilePath> (*get_additional_builtin_paths)() = nullptr;
   
   // Function to get the user update path for the extension.
   // This is typically in the user data directory.
@@ -51,6 +59,24 @@ struct ComponentExtensionConfig {
   
   // Subdirectory name for extension within user data (e.g., "extension").
   const char* extension_subdir;
+  
+  // Update check URL. If empty, update checking will be disabled.
+  GURL update_check_url;
+  
+  // Default constructor (out-of-line)
+  ComponentExtensionConfig();
+  
+  // Copy constructor (out-of-line)
+  ComponentExtensionConfig(const ComponentExtensionConfig& other);
+  
+  // Move constructor (out-of-line)
+  ComponentExtensionConfig(ComponentExtensionConfig&& other) noexcept;
+  
+  // Copy assignment operator (out-of-line)
+  ComponentExtensionConfig& operator=(const ComponentExtensionConfig& other);
+  
+  // Move assignment operator (out-of-line)
+  ComponentExtensionConfig& operator=(ComponentExtensionConfig&& other) noexcept;
 };
 
 // Generic manager for component extensions.

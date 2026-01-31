@@ -15,6 +15,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -65,15 +66,44 @@ base::Version GetExtensionVersionFromPath(const base::FilePath& path) {
 }
 
 ExtensionLoadData DetermineBestExtensionPath(
-    base::FilePath builtin_path,
+    std::vector<base::FilePath> builtin_paths,
     base::FilePath user_update_path) {
   ExtensionLoadData result;
   
-  // 3. Compare versions
-  base::Version builtin_version = GetExtensionVersionFromPath(builtin_path);
+  // Find the best built-in path (highest version)
+  base::FilePath best_builtin_path;
+  base::Version best_builtin_version;
+  
+  for (const auto& builtin_path : builtin_paths) {
+    if (builtin_path.empty()) continue;
+    
+    base::Version version = GetExtensionVersionFromPath(builtin_path);
+    if (version.IsValid() && (!best_builtin_version.IsValid() || version > best_builtin_version)) {
+      best_builtin_path = builtin_path;
+      best_builtin_version = version;
+    } else if (!best_builtin_path.empty() && !version.IsValid() && base::PathExists(builtin_path.AppendASCII("manifest.json"))) {
+      // If no version found but manifest exists, use it as fallback
+      if (!best_builtin_version.IsValid()) {
+        best_builtin_path = builtin_path;
+      }
+    }
+  }
+  
+  // If no valid builtin found, use the first non-empty one
+  if (best_builtin_path.empty() && !builtin_paths.empty()) {
+    for (const auto& builtin_path : builtin_paths) {
+      if (!builtin_path.empty()) {
+        best_builtin_path = builtin_path;
+        break;
+      }
+    }
+  }
+  
+  // Compare with user update path
   base::Version user_version = GetExtensionVersionFromPath(user_update_path);
+  base::Version builtin_version = GetExtensionVersionFromPath(best_builtin_path);
 
-  base::FilePath path_to_load = builtin_path;
+  base::FilePath path_to_load = best_builtin_path;
 
   // Decide which path to use
   if (user_version.IsValid()) {
@@ -111,6 +141,77 @@ ExtensionLoadData DetermineBestExtensionPath(
 }
 
 }  // namespace
+
+// ComponentExtensionConfig implementation
+ComponentExtensionConfig::ComponentExtensionConfig()
+    : extension_name(nullptr),
+      get_builtin_path(nullptr),
+      get_additional_builtin_paths(nullptr),
+      get_user_update_path(nullptr),
+      user_data_subdir(nullptr),
+      extension_subdir(nullptr) {}
+
+ComponentExtensionConfig::ComponentExtensionConfig(const ComponentExtensionConfig& other)
+    : extension_name(other.extension_name),
+      expected_extension_id(other.expected_extension_id),
+      get_builtin_path(other.get_builtin_path),
+      get_additional_builtin_paths(other.get_additional_builtin_paths),
+      get_user_update_path(other.get_user_update_path),
+      user_data_subdir(other.user_data_subdir),
+      extension_subdir(other.extension_subdir),
+      update_check_url(other.update_check_url) {}
+
+ComponentExtensionConfig::ComponentExtensionConfig(ComponentExtensionConfig&& other) noexcept
+    : extension_name(other.extension_name),
+      expected_extension_id(std::move(other.expected_extension_id)),
+      get_builtin_path(other.get_builtin_path),
+      get_additional_builtin_paths(other.get_additional_builtin_paths),
+      get_user_update_path(other.get_user_update_path),
+      user_data_subdir(other.user_data_subdir),
+      extension_subdir(other.extension_subdir),
+      update_check_url(std::move(other.update_check_url)) {
+  other.extension_name = nullptr;
+  other.get_builtin_path = nullptr;
+  other.get_additional_builtin_paths = nullptr;
+  other.get_user_update_path = nullptr;
+  other.user_data_subdir = nullptr;
+  other.extension_subdir = nullptr;
+}
+
+ComponentExtensionConfig& ComponentExtensionConfig::operator=(const ComponentExtensionConfig& other) {
+  if (this != &other) {
+    extension_name = other.extension_name;
+    expected_extension_id = other.expected_extension_id;
+    get_builtin_path = other.get_builtin_path;
+    get_additional_builtin_paths = other.get_additional_builtin_paths;
+    get_user_update_path = other.get_user_update_path;
+    user_data_subdir = other.user_data_subdir;
+    extension_subdir = other.extension_subdir;
+    update_check_url = other.update_check_url;
+  }
+  return *this;
+}
+
+ComponentExtensionConfig& ComponentExtensionConfig::operator=(ComponentExtensionConfig&& other) noexcept {
+  if (this != &other) {
+    extension_name = other.extension_name;
+    expected_extension_id = std::move(other.expected_extension_id);
+    get_builtin_path = other.get_builtin_path;
+    get_additional_builtin_paths = other.get_additional_builtin_paths;
+    get_user_update_path = other.get_user_update_path;
+    user_data_subdir = other.user_data_subdir;
+    extension_subdir = other.extension_subdir;
+    update_check_url = std::move(other.update_check_url);
+    
+    other.extension_name = nullptr;
+    other.get_builtin_path = nullptr;
+    other.get_additional_builtin_paths = nullptr;
+    other.get_user_update_path = nullptr;
+    other.user_data_subdir = nullptr;
+    other.extension_subdir = nullptr;
+  }
+  return *this;
+}
 
 // ComponentExtensionManager implementation
 ComponentExtensionManager::ComponentExtensionManager(const ComponentExtensionConfig& config)
@@ -191,8 +292,18 @@ extensions::ExtensionId ComponentExtensionManager::LoadExtension(
 void ComponentExtensionManager::LoadExtensionFromDefaultPath(
     content::BrowserContext* context,
     OnExtensionLoadedCallback callback) {
-  // 1. Get Built-in Path (Read-only, bundled with Chrome)
-  base::FilePath builtin_path = GetBuiltinPath();
+  // 1. Get Built-in Path(s) (Read-only, bundled with Chrome)
+  std::vector<base::FilePath> builtin_paths;
+  base::FilePath primary_builtin = GetBuiltinPath();
+  if (!primary_builtin.empty()) {
+    builtin_paths.push_back(primary_builtin);
+  }
+  
+  // Add additional built-in paths if configured
+  if (config_.get_additional_builtin_paths) {
+    std::vector<base::FilePath> additional = config_.get_additional_builtin_paths();
+    builtin_paths.insert(builtin_paths.end(), additional.begin(), additional.end());
+  }
 
   // 2. Get User Update Path (Read-write, in User Data Directory)
   base::FilePath user_update_path = GetUserUpdatePath(context);
@@ -203,7 +314,7 @@ void ComponentExtensionManager::LoadExtensionFromDefaultPath(
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&DetermineBestExtensionPath, builtin_path, user_update_path),
+      base::BindOnce(&DetermineBestExtensionPath, std::move(builtin_paths), user_update_path),
       base::BindOnce(&ComponentExtensionManager::OnExtensionPathDetermined,
                      base::Unretained(this), context, std::move(callback)));
 }
@@ -292,8 +403,10 @@ bool ComponentExtensionManager::ShowExtension(content::BrowserContext* context) 
   XenonWebDialog::Show(context, extension_url, 400, 300,
                        base::UTF8ToUTF16(std::string(config_.extension_name)));
 
-  // Note: Update checking functionality can be added here if needed
-  // CheckForUpdates(context, GURL("http://localhost:3000/download/update_manifest.json"));
+  // Trigger update check if URL is configured
+  if (config_.update_check_url.is_valid()) {
+    CheckForUpdates(context, config_.update_check_url);
+  }
 
   return true;
 }
@@ -577,9 +690,11 @@ ComponentExtensionConfig CreateXenonConfig() {
   config.extension_name = kXenonExtensionName;
   config.expected_extension_id = "mkkhnfilihmphalmfjjbobdnaikhbeoi";
   config.get_builtin_path = GetXenonBuiltinPath;
+  config.get_additional_builtin_paths = nullptr;  // No additional built-in paths for now
   config.get_user_update_path = GetXenonUserUpdatePath;
   config.user_data_subdir = "xenon_extension";
   config.extension_subdir = "";  // Not used when using get_user_update_path
+  config.update_check_url = GURL("http://localhost:3000/download/update_manifest.json");
   return config;
 }
 
@@ -623,13 +738,7 @@ const extensions::Extension* XenonExtensionManager::FindExtension(
 }
 
 bool XenonExtensionManager::ShowExtension(content::BrowserContext* context) {
-  if (!manager_->ShowExtension(context)) {
-    return false;
-  }
-  
-  // Trigger update check for testing
-  CheckForUpdates(context, GURL("http://localhost:3000/download/update_manifest.json"));
-  return true;
+  return manager_->ShowExtension(context);
 }
 
 void XenonExtensionManager::CheckForUpdates(content::BrowserContext* context,
