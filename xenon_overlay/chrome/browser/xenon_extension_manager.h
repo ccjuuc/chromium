@@ -1,6 +1,7 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_XENON_EXTENSION_MANAGER_H_
 #define XENON_OVERLAY_CHROME_BROWSER_XENON_EXTENSION_MANAGER_H_
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -9,11 +10,10 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "url/gurl.h"
 #include "base/memory/singleton.h"
+#include "base/values.h"
 #include "extensions/common/extension_id.h"
 #include "url/gurl.h"
-#include "base/values.h"
 
 namespace content {
 class BrowserContext;
@@ -31,134 +31,113 @@ class ExtensionRegistry;
 
 namespace xenon {
 
-// Configuration for a component extension manager.
-struct ComponentExtensionConfig {
-  // Extension name for identification and logging.
-  const char* extension_name;
-  
-  // Expected extension ID (for validation, can be empty if not known).
-  // If empty, the ID will be computed from the manifest's key field.
-  std::string expected_extension_id;
-  
-  // Function to get the built-in extension path(s).
-  // This is typically a path relative to the module directory.
-  // For multiple built-in paths, return the primary one here.
-  base::FilePath (*get_builtin_path)();
-  
-  // Optional: Function to get additional built-in extension paths.
-  // Returns a list of alternative built-in paths to check.
-  // If null, only get_builtin_path() will be used.
-  std::vector<base::FilePath> (*get_additional_builtin_paths)() = nullptr;
-  
-  // Function to get the user update path for the extension.
-  // This is typically in the user data directory.
-  base::FilePath (*get_user_update_path)(content::BrowserContext* context);
-  
-  // Subdirectory name in user data directory (e.g., "xenon_overlay").
-  const char* user_data_subdir;
-  
-  // Subdirectory name for extension within user data (e.g., "extension").
-  const char* extension_subdir;
-  
-  // Update check URL. If empty, update checking will be disabled.
-  GURL update_check_url;
-  
-  // Default constructor (out-of-line)
+class ComponentExtensionConfig {
+ public:
   ComponentExtensionConfig();
-  
-  // Copy constructor (out-of-line)
   ComponentExtensionConfig(const ComponentExtensionConfig& other);
-  
-  // Move constructor (out-of-line)
   ComponentExtensionConfig(ComponentExtensionConfig&& other) noexcept;
-  
-  // Copy assignment operator (out-of-line)
   ComponentExtensionConfig& operator=(const ComponentExtensionConfig& other);
-  
-  // Move assignment operator (out-of-line)
   ComponentExtensionConfig& operator=(ComponentExtensionConfig&& other) noexcept;
+  ~ComponentExtensionConfig();
+
+  std::string extension_name;
+  std::string expected_extension_id;
+  std::string builtin_path;  // Relative to module directory, e.g., "resources/xenon_extension"
+  std::vector<std::string> additional_builtin_paths;  // Additional paths to check
+  std::string user_data_subdir;  // Subdirectory in user data, e.g., "xenon_extension"
+  GURL update_check_url;
 };
 
-// Generic manager for component extensions.
-// Handles extension loading, registration, and display with configurable paths and IDs.
-class ComponentExtensionManager {
+class ComponentExtensionConfigBuilder {
  public:
-  // Creates a manager with the given configuration.
-  explicit ComponentExtensionManager(const ComponentExtensionConfig& config);
-  ~ComponentExtensionManager();
+  ComponentExtensionConfigBuilder() = default;
+  ~ComponentExtensionConfigBuilder() = default;
 
-  // Loads the component extension from the specified path.
-  // Returns the extension ID if successful, empty string otherwise.
-  extensions::ExtensionId LoadExtension(
-      content::BrowserContext* context,
-      const base::FilePath& extension_path);
+  ComponentExtensionConfigBuilder& SetExtensionName(const std::string& name);
+  ComponentExtensionConfigBuilder& SetExpectedExtensionId(const std::string& id);
+  ComponentExtensionConfigBuilder& SetBuiltinPath(const std::string& path);
+  ComponentExtensionConfigBuilder& AddAdditionalBuiltinPath(const std::string& path);
+  ComponentExtensionConfigBuilder& SetUserDataSubdir(const std::string& subdir);
+  ComponentExtensionConfigBuilder& SetUpdateCheckUrl(const GURL& url);
 
-  using OnExtensionLoadedCallback = base::OnceCallback<void(const extensions::ExtensionId&)>;
-  // Loads the component extension from the default location.
-  // Asynchronously determines the best path (built-in vs user updated) to avoid UI thread blocking.
-  void LoadExtensionFromDefaultPath(
-      content::BrowserContext* context,
-      OnExtensionLoadedCallback callback = base::NullCallback());
-
-  // Finds and returns the extension if it's loaded.
-  const extensions::Extension* FindExtension(
-      content::BrowserContext* context);
-
-  // Shows the extension in a WebDialog.
-  // Returns true if the extension was found and displayed.
-  bool ShowExtension(content::BrowserContext* context);
-
-  // Gets the extension name used for identification.
-  const char* GetExtensionName() const { return config_.extension_name; }
-
-  // Gets the built-in extension path.
-  base::FilePath GetBuiltinPath() const { return config_.get_builtin_path(); }
-
-  // Gets the user update path for the extension.
-  base::FilePath GetUserUpdatePath(content::BrowserContext* context) const {
-    return config_.get_user_update_path(context);
-  }
+  ComponentExtensionConfig Build();
 
  private:
   ComponentExtensionConfig config_;
+};
 
-  // Helper to get the ComponentLoader for a context.
+class ComponentExtensionManager {
+ public:
+  ComponentExtensionManager();
+  ~ComponentExtensionManager();
+
+  void RegisterExtension(const std::string& extension_name,
+                        const ComponentExtensionConfig& config);
+
+  extensions::ExtensionId LoadExtension(
+      content::BrowserContext* context,
+      const std::string& extension_name,
+      const base::FilePath& extension_path);
+
+  using OnExtensionLoadedCallback = base::OnceCallback<void(const extensions::ExtensionId&)>;
+  void LoadExtensionFromDefaultPath(
+      content::BrowserContext* context,
+      const std::string& extension_name,
+      OnExtensionLoadedCallback callback = base::NullCallback());
+
+  const extensions::Extension* FindExtension(
+      content::BrowserContext* context,
+      const std::string& extension_name);
+
+  bool ShowExtension(content::BrowserContext* context,
+                     const std::string& extension_name);
+
+  void CheckForUpdates(content::BrowserContext* context,
+                       const std::string& extension_name,
+                       const GURL& update_check_url);
+
+  void LoadAllExtensions(content::BrowserContext* context);
+
+  base::FilePath GetBuiltinPath(const std::string& extension_name) const;
+  base::FilePath GetUserUpdatePath(content::BrowserContext* context,
+                                   const std::string& extension_name) const;
+
+ private:
+  std::map<std::string, ComponentExtensionConfig> configs_;
+
   extensions::ComponentLoader* GetComponentLoader(
       content::BrowserContext* context);
 
-  // Helper to get the ExtensionRegistry for a context.
   extensions::ExtensionRegistry* GetExtensionRegistry(
       content::BrowserContext* context);
 
-  // Helper to add extension with parsed manifest to ComponentLoader.
-  // This is the common logic used by LoadExtension and OnExtensionPathDetermined.
   extensions::ExtensionId AddExtensionWithManifest(
       content::BrowserContext* context,
+      const std::string& extension_name,
       base::Value::Dict manifest,
       const base::FilePath& extension_path);
 
-  // Callback for when the extension path has been determined on a background thread.
   void OnExtensionPathDetermined(content::BrowserContext* context,
+                                 const std::string& extension_name,
                                  OnExtensionLoadedCallback callback,
                                  std::pair<base::FilePath, std::optional<base::Value::Dict>> result);
 
- public:
-  // Update-related methods (can be made optional via config if needed)
-  void CheckForUpdates(content::BrowserContext* context,
-                       const GURL& update_check_url);
-
- private:
   void OnUpdateCheckComplete(content::BrowserContext* context,
+                             const std::string& extension_name,
                              std::optional<std::string> response_body);
   void DownloadUpdate(content::BrowserContext* context,
+                      const std::string& extension_name,
                       const GURL& download_url,
                       const std::string& version);
   void OnDownloadComplete(content::BrowserContext* context,
+                          const std::string& extension_name,
                           const std::string& version,
                           base::FilePath response_path);
   void OnDownloadCompleteOnUIThread(content::BrowserContext* context,
+                                     const std::string& extension_name,
                                      base::FilePath response_path);
   void OnUnzipComplete(content::BrowserContext* context,
+                       const std::string& extension_name,
                        const base::FilePath& unzip_dir,
                        bool success);
 
@@ -166,13 +145,10 @@ class ComponentExtensionManager {
   std::unique_ptr<network::SimpleURLLoader> download_loader_;
 };
 
-// Manager for the Xenon component extension.
-// This is a convenience wrapper around ComponentExtensionManager with Xenon-specific configuration.
 class XenonExtensionManager {
  public:
   static XenonExtensionManager* GetInstance();
 
-  // Loads the Xenon component extension from the specified path.
   extensions::ExtensionId LoadExtension(
       content::BrowserContext* context,
       const base::FilePath& extension_path);
@@ -185,19 +161,19 @@ class XenonExtensionManager {
   const extensions::Extension* FindExtension(content::BrowserContext* context);
   bool ShowExtension(content::BrowserContext* context);
 
-  // Checks for updates from the update server.
   void CheckForUpdates(content::BrowserContext* context,
                        const GURL& update_check_url);
 
   static base::FilePath GetDefaultExtensionPath();
-  static const char* GetExtensionName();
+  static const std::string& GetExtensionName();
 
  private:
   friend struct base::DefaultSingletonTraits<XenonExtensionManager>;
   XenonExtensionManager();
   ~XenonExtensionManager();
 
-  std::unique_ptr<ComponentExtensionManager> manager_;
+  ComponentExtensionManager manager_;
+  std::string xenon_extension_name_;
 };
 
 }  // namespace xenon
