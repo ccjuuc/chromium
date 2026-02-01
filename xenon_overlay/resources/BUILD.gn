@@ -9,12 +9,24 @@ grit("resources_grit") {
   deps = [ "webui:resources" ]
 }
 
+# Copy pak file to root output directory (for Windows/Linux)
 copy("copy_pak") {
   sources = [ "$target_gen_dir/xenon_resources.pak" ]
   outputs = [ "$root_out_dir/xenon_resources.pak" ]
   deps = [ ":resources_grit" ]
 }
 
+# Copy pak file to macOS app bundle Resources directory using bundle_data
+# (following Chromium's official approach)
+if (is_mac) {
+  bundle_data("copy_pak_mac") {
+    public_deps = [ ":resources_grit" ]
+    sources = [ "$target_gen_dir/xenon_resources.pak" ]
+    outputs = [ "{{bundle_resources_dir}}/xenon_resources.pak" ]
+  }
+}
+
+# Copy extension files to root output directory (for Windows/Linux)
 copy("copy_extension") {
   sources = [
     "extension/manifest.json",
@@ -25,10 +37,31 @@ copy("copy_extension") {
   outputs = [ "$root_out_dir/resources/xenon_extension/{{source_file_part}}" ]
 }
 
+# Copy extension files to macOS app bundle Resources directory using bundle_data
+# (following Chromium's official approach)
+if (is_mac) {
+  bundle_data("copy_extension_mac") {
+    sources = [
+      "extension/manifest.json",
+      "extension/index.html",
+      "extension/main.js",
+      "extension/background.js",
+    ]
+    outputs = [ "{{bundle_resources_dir}}/resources/xenon_extension/{{source_file_part}}" ]
+  }
+}
+
 group("resources") {
   public_deps = [
     ":resources_grit",
     ":copy_pak",
     ":copy_extension",
   ]
+  
+  if (is_mac) {
+    public_deps += [
+      ":copy_pak_mac",
+      ":copy_extension_mac",
+    ]
+  }
 }
