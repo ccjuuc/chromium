@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple WebUI</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Simple WebUI Template</h1>
+      <p class="subtitle">WebUI with traditional message callbacks (no Mojo)</p>
+    </header>
+
+    <main class="content">
+      <!-- Section 1: Basic Demo (Client-side only) -->
+      <section class="card">
+        <h2>🎯 Client-Side Demo</h2>
+        <p>This is a simple client-side interaction, no C++ communication.</p>
+        <div class="demo-area">
+          <button id="demo-button" class="btn primary">Click Me</button>
+          <p id="demo-output" class="output">Button not clicked yet.</p>
+        </div>
+      </section>
+
+      <!-- Section 2: Get System Info (C++ callback) -->
+      <section class="card">
+        <h2>💻 System Information</h2>
+        <p>Fetches system info from C++ using <code>chrome.send()</code> with Promise.</p>
+        <div class="demo-area">
+          <button id="sys-info-button" class="btn primary">Get System Info</button>
+          <div id="sys-info-output" class="output large">
+            Click the button to fetch system information from C++.
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 3: Log Message (One-way to C++) -->
+      <section class="card">
+        <h2>📝 Log Message to C++</h2>
+        <p>Sends a one-way message to C++ using <code>chrome.send()</code>.</p>
+        <div class="demo-area">
+          <div class="input-group">
+            <input type="text" id="log-input" class="text-input" 
+                   placeholder="Enter a message to log..." value="Hello from WebUI!">
+            <button id="log-button" class="btn secondary">Send Log</button>
+          </div>
+          <p id="log-output" class="output">Message will be logged to Chrome's console.</p>
+        </div>
+      </section>
+
+      <!-- Section 4: Perform Action (Two-way with C++) -->
+      <section class="card">
+        <h2>⚡ Perform Action in C++</h2>
+        <p>Calls a C++ function and receives a response.</p>
+        <div class="demo-area">
+          <div class="input-group">
+            <select id="action-select" class="select-input">
+              <option value="greet">Greet (name)</option>
+              <option value="calculate">Calculate (a, b)</option>
+              <option value="custom">Custom Action</option>
+            </select>
+            <input type="text" id="action-param" class="text-input" 
+                   placeholder="Parameters (e.g., 'World' or '5, 10')">
+            <button id="action-button" class="btn primary">Execute</button>
+          </div>
+          <div id="action-output" class="output large">
+            Select an action and click Execute.
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 5: API Reference -->
+      <section class="card">
+        <h2>📚 API Reference</h2>
+        <div class="code-examples">
+          <div class="code-block">
+            <h4>One-way message (fire and forget):</h4>
+            <pre><code>chrome.send('logMessage', ['Hello', 'info']);</code></pre>
+          </div>
+          <div class="code-block">
+            <h4>Two-way with Promise (request/response):</h4>
+            <pre><code>const info = await sendWithPromise('getSystemInfo');
+console.log(info.operatingSystem);</code></pre>
+          </div>
+          <div class="code-block">
+            <h4>C++ handler registration:</h4>
+            <pre><code>web_ui->RegisterMessageCallback(
+    "getSystemInfo",
+    base::BindRepeating(&Handler::HandleGetSystemInfo,
+                        base::Unretained(this)));</code></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>URL: <code>chrome://simple-webui/</code></p>
+      <p class="hint">Open DevTools (F12) to see console logs.</p>
+    </footer>
+  </div>
+
+  <script src="index.js"></script>
+</body>
+</html>

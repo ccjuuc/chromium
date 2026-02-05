@@ -14,6 +14,7 @@
 #include "ui/base/resource/resource_scale_factor.h"
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
+#include "xenon_overlay/chrome/browser/ui/webui/simple_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_webui_controller.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
@@ -46,10 +47,15 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
     LOG(WARNING) << "XenonBrowserMainExtraParts: Failed to get module directory";
   }
             
-  // Register the Xenon WebUI Config
+  // Register the Xenon WebUI Config (with Mojo)
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::XenonWebUIConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonWebUIConfig";
+
+  // Register Simple WebUI Config (without Mojo)
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::SimpleWebUIConfig>());
+  LOG(INFO) << "XenonBrowserMainExtraParts: Registered SimpleWebUIConfig";
 
   xenon::XenonManager::GetInstance()->EnsureServiceStarted(profile);
   

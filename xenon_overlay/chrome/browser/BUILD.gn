@@ -16,6 +16,8 @@ source_set("browser") {
     "ui/webui/xenon_page_handler.h",
     "ui/webui/xenon_webui_controller.cc",
     "ui/webui/xenon_webui_controller.h",
+    "ui/webui/simple_webui_controller.cc",
+    "ui/webui/simple_webui_controller.h",
     "ui/svg_image_source.cc",
     "ui/svg_image_source.h",
   ]
