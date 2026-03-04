@@ -20,6 +20,24 @@ source_set("browser") {
     "ui/webui/simple_webui_controller.h",
     "ui/svg_image_source.cc",
     "ui/svg_image_source.h",
+
+    "reminder/xenon_reminder_types.cc",
+    "reminder/xenon_reminder_types.h",
+    "reminder/xenon_reminder_notification_observer.h",
+    "reminder/xenon_reminder_notification_manager.cc",
+    "reminder/xenon_reminder_notification_manager.h",
+    "ui/xenon_reminder_card_webview.cc",
+    "ui/xenon_reminder_card_webview.h",
+    "ui/xenon_reminder_notification_group.cc",
+    "ui/xenon_reminder_notification_group.h",
+    "ui/xenon_reminder_notification_container.cc",
+    "ui/xenon_reminder_notification_container.h",
+    "ui/xenon_reminder_notification_widget.cc",
+    "ui/xenon_reminder_notification_widget.h",
+    "ui/xenon_tip_bar_widget.cc",
+    "ui/xenon_tip_bar_widget.h",
+    "ui/xenon_reminder_browser_observer.cc",
+    "ui/xenon_reminder_browser_observer.h",
   ]
 
   deps = [
@@ -27,6 +45,8 @@ source_set("browser") {
     "//chrome/browser:browser_process",
     "//chrome/browser/ui:ui",
     "//content/public/browser",
+    "//ui/compositor",
+    "//ui/views",
     "//services/network/public/mojom",
     "//ui/base",
     "//ui/display",

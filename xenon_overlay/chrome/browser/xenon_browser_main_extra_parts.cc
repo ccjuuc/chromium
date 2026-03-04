@@ -13,6 +13,10 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_scale_factor.h"
 #include "url/gurl.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_reminder_browser_observer.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/ui/webui/simple_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_webui_controller.h"
@@ -21,7 +25,19 @@
 
 XenonBrowserMainExtraParts::XenonBrowserMainExtraParts() = default;
 
-XenonBrowserMainExtraParts::~XenonBrowserMainExtraParts() = default;
+XenonBrowserMainExtraParts::~XenonBrowserMainExtraParts() {
+  // 观察者已在 PostMainMessageLoopRun 中移除并 reset，此处仅防御性清空
+  reminder_browser_observer_.reset();
+}
+
+void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
+  // 在有序关闭阶段从 BrowserList 移除观察者并析构，避免进程退出时
+  // 静态析构顺序导致 ObserverList 先于本对象析构而触发 observers_.empty() 的 CHECK
+  if (reminder_browser_observer_) {
+    BrowserList::GetInstance()->RemoveObserver(reminder_browser_observer_.get());
+    reminder_browser_observer_.reset();
+  }
+}
 
 void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
                                                  bool is_initial_profile) {
@@ -58,8 +74,14 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered SimpleWebUIConfig";
 
   xenon::XenonManager::GetInstance()->EnsureServiceStarted(profile);
-  
 
+  // 初始化提醒 Manager 并注册 Browser 观察者（为每个窗口创建提醒 Widget + 注册 Ctrl+Shift+R 测试快捷键）
+  xenon::XenonReminderNotificationManager::GetInstance()->Initialize();
+  reminder_browser_observer_ = std::make_unique<xenon::XenonReminderBrowserObserver>();
+  BrowserList::GetInstance()->AddObserver(reminder_browser_observer_.get());
+  for (Browser* browser : *BrowserList::GetInstance()) {
+    reminder_browser_observer_->OnBrowserAdded(browser);
+  }
 
   // Optional: Trigger a ping to verify connectivity.
   xenon::XenonManager::GetInstance()->Ping(base::BindOnce(
