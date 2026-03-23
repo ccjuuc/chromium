@@ -1,5 +1,23 @@
 import("//third_party/skia/modules/svg/svg.gni")
 
+source_set("xenon_common_bubble") {
+  sources = [
+    "ui/xenon_common_bubble.cc",
+    "ui/xenon_common_bubble.h",
+  ]
+
+  deps = [
+    "//base",
+    "//cc/paint",
+    "//ui/base",
+    "//ui/base:types",
+    "//ui/base/mojom:ui_base_types",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
 source_set("browser") {
   defines = []
   sources = [

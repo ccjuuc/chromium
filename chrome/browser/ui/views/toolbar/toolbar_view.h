@@ -279,6 +279,7 @@ class ToolbarView : public views::AccessiblePaneView,
   void ActiveStateChanged();
 
   void NewTabButtonPressed(const ui::Event& event);
+  void TestBubbleButtonPressed(const ui::Event& event);
 
   // Determines how corners are painted. Return value is how to paint leading
   // and/or trailing corners, respectively. See comments on `leading_curve_` and
@@ -321,6 +322,7 @@ class ToolbarView : public views::AccessiblePaneView,
   raw_ptr<MediaToolbarButtonView> media_button_ = nullptr;
   raw_ptr<BrowserAppMenuButton> app_menu_button_ = nullptr;
   raw_ptr<views::View> new_tab_button_ = nullptr;
+  raw_ptr<ToolbarButton> test_bubble_button_ = nullptr;
   raw_ptr<PinnedActionToolbarButton> tab_search_button_ = nullptr;
 
   const raw_ptr<Browser> browser_;

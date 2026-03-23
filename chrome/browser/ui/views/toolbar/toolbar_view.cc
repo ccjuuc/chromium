@@ -132,6 +132,7 @@
 #include "ui/views/widget/tooltip_manager.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_common_bubble.h"
 
 #if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
 #include "chrome/browser/ui/views/frame/webui_tab_strip_container_view.h"
@@ -186,7 +187,6 @@ auto& GetViewCommandMap() {
 
 constexpr int kBrowserAppMenuRefreshExpandedMargin = 5;
 constexpr int kBrowserAppMenuRefreshCollapsedMargin = 2;
-
 bool IsMigratedClickToCallBubble(
     IntentPickerBubbleView::BubbleType bubble_type) {
   return bubble_type == IntentPickerBubbleView::BubbleType::kClickToCall &&
@@ -483,6 +483,12 @@ void ToolbarView::Init() {
   overflow_button_ =
       container_view_->AddChildView(std::make_unique<OverflowButton>());
   overflow_button_->SetVisible(false);
+
+  auto test_bubble_button = std::make_unique<ToolbarButton>(base::BindRepeating(
+      &ToolbarView::TestBubbleButtonPressed, base::Unretained(this)));
+  test_bubble_button->SetVectorIcon(kNewTabToolbarButtonIcon);
+  test_bubble_button->SetTooltipText(u"Show test bubble");
+  test_bubble_button_ = container_view_->AddChildView(std::move(test_bubble_button));
 
   auto app_menu_button = std::make_unique<BrowserAppMenuButton>(this);
   app_menu_button->SetFlipCanvasOnPaintForRTLUI(true);
@@ -899,6 +905,13 @@ void ToolbarView::ActiveStateChanged() {
 void ToolbarView::NewTabButtonPressed(const ui::Event& event) {
   chrome::NewTab(browser_view_->browser(),
                  NewTabTypes::kNewTabButtonInToolbarForTouch);
+}
+
+void ToolbarView::TestBubbleButtonPressed(const ui::Event& event) {
+  if (!test_bubble_button_) {
+    return;
+  }
+  xenon::XenonCommonBubble::Show(test_bubble_button_, u"Toolbar test bubble");
 }
 
 bool ToolbarView::AcceleratorPressed(const ui::Accelerator& accelerator) {

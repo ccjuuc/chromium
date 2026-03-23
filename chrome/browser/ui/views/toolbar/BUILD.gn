@@ -209,6 +209,7 @@ source_set("impl") {
     "//ui/gfx/range",
     "//ui/native_theme",
     "//ui/views/controls/webview",
+    "//xenon_overlay/chrome/browser:xenon_common_bubble",
   ]
 
   if (enable_webui_tab_strip) {
