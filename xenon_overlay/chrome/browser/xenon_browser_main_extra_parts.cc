@@ -8,11 +8,9 @@
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "content/public/browser/web_ui_browser_interface_broker_registry.h"
 #include "content/public/browser/webui_config_map.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_scale_factor.h"
-#include "url/gurl.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
@@ -83,43 +81,21 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
     reminder_browser_observer_->OnBrowserAdded(browser);
   }
 
-  // Optional: Trigger a ping to verify connectivity.
-  xenon::XenonManager::GetInstance()->Ping(base::BindOnce(
-      [](const std::string& response) {
-        LOG(INFO) << "Xenon Startup Ping Response: " << response;
-      }));
-  
-
-  //根据命令行参数 --show-xenon-extension 决定是否显示扩展界面
+  // 默认仅加载组件扩展（不自动打开扩展弹窗）；--show-xenon-extension 则打开 Xenon WebUI 浮层
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch("show-xenon-extension")) {
       // Load and register the component extension
       xenon::XenonExtensionManager* extension_manager =
           xenon::XenonExtensionManager::GetInstance();
       extension_manager->LoadExtensionFromDefaultPath(
           profile,
-          base::BindOnce(
-              [](content::BrowserContext* context,
-                 const extensions::ExtensionId& extension_id) {
-                if (!extension_id.empty()) {
-                  LOG(INFO) << "XenonBrowserMainExtraParts: Component extension "
-                               "loaded with ID: "
-                            << extension_id;
-
-                  // Verify Extension UI by launching it on startup
-                  xenon::XenonExtensionManager::GetInstance()->ShowExtension(
-                      context);
-                }
-              },
-              profile));
+          base::BindOnce([](const extensions::ExtensionId& extension_id) {
+            if (!extension_id.empty()) {
+              LOG(INFO) << "XenonBrowserMainExtraParts: Component extension "
+                           "loaded with ID: "
+                        << extension_id;
+            }
+          }));
   } else {
-      // Register Mojo interfaces for Xenon WebUI
-      content::WebUIBrowserInterfaceBrokerRegistry::GetTrustedRegistry()
-      .ForWebUI<xenon::XenonWebUIController>()
-      .Add<xenon::mojom::PageHandler>();
-
-
-      GURL app_url("chrome://xenon-overlay/");
-
-      xenon::XenonWebDialog::Show(profile, app_url, 800, 600, u"Xenon Overlay");
+    xenon::XenonWebDialog::ShowXenonOverlay(profile);
   }
 }

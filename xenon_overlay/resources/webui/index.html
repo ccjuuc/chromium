@@ -20,22 +20,23 @@
         </button>
       </div>
     </div>
-    
+
     <div class="content">
       <div class="hero-section">
         <h1>Welcome to Xenon</h1>
-        <p>Advanced Overlay System</p>
-        <button id="action-btn" class="primary-btn">Connect Service</button>
+        <p>Mojo / Remote 自测（四项独立）</p>
+        <div class="test-grid">
+          <button id="test-main-remote" class="primary-btn">① Main Remote · Ping</button>
+          <button id="test-shared-remote" class="primary-btn secondary-outline">② SharedRemote duplicate</button>
+          <button id="test-associated" class="primary-btn secondary-outline">③ Associated Remote</button>
+          <button id="test-observer" class="primary-btn secondary-outline">④ Utility→Browser Observer</button>
+        </div>
       </div>
 
       <div class="status-card">
         <div class="status-item">
-          <span class="label">Status</span>
+          <span class="label">Last result</span>
           <span id="status-text" class="value ready">Ready</span>
-        </div>
-        <div class="status-item">
-          <span class="label">Latency</span>
-          <span class="value">0ms</span>
         </div>
       </div>
     </div>

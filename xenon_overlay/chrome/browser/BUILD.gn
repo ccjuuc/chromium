@@ -1,4 +1,5 @@
 import("//third_party/skia/modules/svg/svg.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 source_set("xenon_common_bubble") {
   sources = [
@@ -82,5 +83,18 @@ source_set("browser") {
     "//services/network/public/cpp",
     "//components/services/unzip/content",
     "//components/services/unzip/public/cpp",
+    "//xenon_overlay/buildflags:buildflags",
   ]
+}
+
+if (enable_xenon_service) {
+  source_set("unit_tests") {
+    testonly = true
+    sources = [ "xenon_manager_unittest.cc" ]
+    deps = [
+      "//base/test:test_support",
+      "//testing/gtest",
+      ":browser",
+    ]
+  }
 }

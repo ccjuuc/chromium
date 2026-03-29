@@ -3,9 +3,21 @@ module xenon.mojom;
 // Browser-side handler for requests from WebUI page.
 interface PageHandler {
   // Requests the browser to close the overlay.
-  // Requests the browser to close the overlay.
   Close();
 
-  // Connects to the Xenon service.
+  // Connects to the Xenon service (same as PingMainService, user-facing label).
   ConnectToService() => (bool success, string message);
+
+  // ① Main process → Utility: XenonMainService remote (Ping / network path).
+  PingMainService() => (bool success, string message);
+
+  // ② Duplicate handle: mojo::SharedRemote clone is_bound (same pipe family).
+  TestSharedRemoteDuplicate() => (bool success, string message);
+
+  // ③ Associated interface on the same message pipe (XenonAssociatedSide).
+  PingAssociatedRemote() => (bool success, string message);
+
+  // ④ Utility → Browser: registers for next OnServiceEvent, then triggers Ping
+  // so XenonServiceImpl pushes XenonBrowserObserver.OnServiceEvent.
+  TestUtilityToBrowserObserver() => (bool success, string message);
 };

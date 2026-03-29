@@ -109,6 +109,25 @@ body {
 
 .hero-section {
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.test-grid {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.test-grid .primary-btn {
+  margin-top: 0;
+  width: 100%;
 }
 
 h1 {
@@ -150,15 +169,28 @@ p {
   transform: translateY(0);
 }
 
+.primary-btn.secondary-outline {
+  margin-top: 12px;
+  background: transparent;
+  border: 1px solid rgba(76, 201, 240, 0.6);
+  color: #4cc9f0;
+  box-shadow: none;
+}
+
+.primary-btn.secondary-outline:hover {
+  background: rgba(76, 201, 240, 0.12);
+  box-shadow: 0 4px 12px rgba(76, 201, 240, 0.2);
+}
+
 /* Status Card */
 .status-card {
   width: 100%;
-  max-width: 300px;
+  max-width: 420px;
   background: rgba(255, 255, 255, 0.03);
   border-radius: 12px;
   padding: 16px;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
@@ -177,8 +209,12 @@ p {
 
 .status-item .value {
   font-family: 'Cascadia Code', monospace;
-  font-size: 14px;
+  font-size: 12px;
   color: rgba(255, 255, 255, 0.9);
+  word-break: break-word;
+  line-height: 1.35;
+  max-height: 4.5em;
+  overflow-y: auto;
 }
 
 .status-item .value.ready {

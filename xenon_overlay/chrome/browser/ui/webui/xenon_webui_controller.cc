@@ -1,22 +1,39 @@
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_webui_controller.h"
 
-#include "content/public/browser/web_ui.h"
-#include "content/public/browser/web_ui_data_source.h"
-#include "content/public/browser/web_contents.h"
+#include <mutex>
+
 #include "content/public/browser/browser_context.h"
-
-
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_browser_interface_broker_registry.h"
+#include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon {
 
 namespace {
+
 constexpr char kHost[] = "xenon-overlay";
+
+// `WebUIBrowserInterfaceBrokerRegistry::ForWebUI` must run at most once per
+// controller type. Lazily register when the first xenon-overlay page is
+// created so chrome:// need not list Xenon in central binders.
+void EnsureTrustedBrokerKnowsPageHandler() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    content::WebUIBrowserInterfaceBrokerRegistry::GetTrustedRegistry()
+        .ForWebUI<XenonWebUIController>()
+        .Add<mojom::PageHandler>();
+  });
+}
+
 }  // namespace
 
 XenonWebUIController::XenonWebUIController(content::WebUI* web_ui)
     : ui::MojoWebUIController(web_ui) {
+  EnsureTrustedBrokerKnowsPageHandler();
+
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       web_ui->GetWebContents()->GetBrowserContext(), kHost);
 

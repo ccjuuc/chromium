@@ -8,6 +8,7 @@ source_set("xenon_service") {
     "//base",
     "//mojo/public/cpp/bindings",
     "//services/network/public/cpp",
+    "//xenon_overlay/buildflags:buildflags",
     "//xenon_overlay/public/mojom",
   ]
 }

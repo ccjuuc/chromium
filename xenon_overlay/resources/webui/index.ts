@@ -1,44 +1,63 @@
 import {PageHandler} from './xenon.mojom-webui.js';
 
-// Get the remote handler to communicate with the C++ backend
 const handler = PageHandler.getRemote();
 
 console.log('Xenon WebUI Loaded');
 
-document.addEventListener('DOMContentLoaded', () => {
-    const closeBtn = document.getElementById('close-btn');
-    if (closeBtn) {
-        closeBtn.addEventListener('click', () => {
-             // Use Mojo to close the dialog
-             console.log('Close requested via Mojo');
-             handler.close();
-        });
-    }
+function setStatus(el: HTMLElement | null, working: boolean, ok: boolean, message: string) {
+  if (!el) {
+    return;
+  }
+  if (working) {
+    el.textContent = '…';
+    el.style.color = '#ffd166';
+    return;
+  }
+  el.textContent = message || (ok ? 'OK' : 'Error');
+  el.style.color = ok ? '#06d6a0' : '#ef476f';
+}
 
-    const actionBtn = document.getElementById('action-btn');
-    if (actionBtn) {
-        actionBtn.addEventListener('click', () => {
-            const statusText = document.getElementById('status-text');
-            if (statusText) {
-                statusText.textContent = "Connecting...";
-                statusText.style.color = "#ffd166";
-                
-                // Call Mojo C++ backend to connect to service
-                handler.connectToService().then((result) => {
-                    const {success, message} = result;
-                    console.log('ConnectToService result:', success, message);
-                    
-                    if (success) {
-                        statusText.textContent = "Connected";
-                        statusText.style.color = "#06d6a0";
-                        // Can also optionally display the message
-                    } else {
-                        statusText.textContent = "Error";
-                        statusText.style.color = "#ef476f";
-                        console.error('Connection failed:', message);
-                    }
-                });
-            }
-        });
-    }
+document.addEventListener('DOMContentLoaded', () => {
+  const statusText = document.getElementById('status-text');
+
+  document.getElementById('close-btn')?.addEventListener('click', () => {
+    console.log('Close requested via Mojo');
+    handler.close();
+  });
+
+  document.getElementById('test-main-remote')?.addEventListener('click', () => {
+    setStatus(statusText, true, false, '');
+    handler.pingMainService().then((result) => {
+      const {success, message} = result;
+      console.log('PingMainService:', success, message);
+      setStatus(statusText, false, success, message);
+    });
+  });
+
+  document.getElementById('test-shared-remote')?.addEventListener('click', () => {
+    setStatus(statusText, true, false, '');
+    handler.testSharedRemoteDuplicate().then((result) => {
+      const {success, message} = result;
+      console.log('TestSharedRemoteDuplicate:', success, message);
+      setStatus(statusText, false, success, message);
+    });
+  });
+
+  document.getElementById('test-associated')?.addEventListener('click', () => {
+    setStatus(statusText, true, false, '');
+    handler.pingAssociatedRemote().then((result) => {
+      const {success, message} = result;
+      console.log('PingAssociatedRemote:', success, message);
+      setStatus(statusText, false, success, message);
+    });
+  });
+
+  document.getElementById('test-observer')?.addEventListener('click', () => {
+    setStatus(statusText, true, false, '');
+    handler.testUtilityToBrowserObserver().then((result) => {
+      const {success, message} = result;
+      console.log('TestUtilityToBrowserObserver:', success, message);
+      setStatus(statusText, false, success, message);
+    });
+  });
 });

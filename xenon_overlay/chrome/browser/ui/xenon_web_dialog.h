@@ -9,6 +9,8 @@ namespace content {
 class BrowserContext;
 }
 
+class Profile;
+
 namespace xenon {
 
 // A generic WebDialog delegate for showing HTML content in a dialog.
@@ -28,6 +30,10 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                    int width,
                    int height,
                    const std::u16string& title);
+
+  // `--show-xenon-extension`: register Xenon WebUI Mojo and open chrome://xenon-overlay/.
+  // Remote / observer checks run from the WebUI page (split Mojo tests).
+  static void ShowXenonOverlay(Profile* profile);
 
  private:
   XenonWebDialog(const GURL& url,

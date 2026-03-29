@@ -6,4 +6,14 @@ declare_args() {
   # Xenon Overlay Service is enabled on Windows, Linux, and Mac.
   # ChromeOS and Android are not currently supported targets for this overlay.
   enable_xenon_service = is_win || is_linux || is_mac
+
+  # When true, XenonManager binds XenonMainService with mojo::SharedRemote on the
+  # UI thread so handles can be copied across sequences. When false, uses Remote.
+  enable_xenon_manager_shared_remote = true
+
+  # Associated interface XenonAssociatedSide (same pipe as XenonMainService).
+  enable_xenon_associated_side = true
+
+  # Utility→Browser XenonBrowserObserver + SetBrowserObserver registration.
+  enable_xenon_browser_observer = true
 }

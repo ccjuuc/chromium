@@ -1,7 +1,11 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
 #include "content/public/browser/browser_context.h"
+#include "url/gurl.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
@@ -126,6 +130,11 @@ void XenonWebDialog::Show(content::BrowserContext* context,
 
   widget->Init(std::move(params));
   widget->Show();
+}
+
+// static
+void XenonWebDialog::ShowXenonOverlay(Profile* profile) {
+  Show(profile, GURL("chrome://xenon-overlay/"), 800, 600, u"Xenon Overlay");
 }
 
 XenonWebDialog::XenonWebDialog(const GURL& url,

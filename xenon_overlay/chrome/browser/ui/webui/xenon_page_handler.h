@@ -21,9 +21,14 @@ class XenonPageHandler : public mojom::PageHandler {
   XenonPageHandler& operator=(const XenonPageHandler&) = delete;
 
   // mojom::PageHandler:
-  // mojom::PageHandler:
   void Close() override;
   void ConnectToService(ConnectToServiceCallback callback) override;
+  void PingMainService(PingMainServiceCallback callback) override;
+  void TestSharedRemoteDuplicate(
+      TestSharedRemoteDuplicateCallback callback) override;
+  void PingAssociatedRemote(PingAssociatedRemoteCallback callback) override;
+  void TestUtilityToBrowserObserver(
+      TestUtilityToBrowserObserverCallback callback) override;
 
  private:
   mojo::Receiver<mojom::PageHandler> receiver_;

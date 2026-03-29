@@ -1,11 +1,21 @@
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_page_handler.h"
 
+#include "build/buildflag.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 
 namespace xenon {
+
+namespace {
+
+bool IsOkPingReply(const std::string& response) {
+  return !response.empty() && response.rfind("Error:", 0) != 0;
+}
+
+}  // namespace
 
 XenonPageHandler::XenonPageHandler(
     mojo::PendingReceiver<mojom::PageHandler> receiver,
@@ -22,34 +32,155 @@ void XenonPageHandler::Close() {
 }
 
 void XenonPageHandler::ConnectToService(ConnectToServiceCallback callback) {
-  LOG(INFO) << "XenonPageHandler: ConnectToService requested";
-  
+  // Same behavior as PingMainService with slightly different success wording.
+  PingMainService(base::BindOnce(
+      [](ConnectToServiceCallback cb, bool success, const std::string& message) {
+        if (success) {
+          std::move(cb).Run(true, "Connected: " + message);
+        } else {
+          std::move(cb).Run(false, message);
+        }
+      },
+      std::move(callback)));
+}
+
+void XenonPageHandler::PingMainService(PingMainServiceCallback callback) {
+  LOG(INFO) << "XenonPageHandler: PingMainService requested";
+
   if (!web_ui_ || !web_ui_->GetWebContents()) {
     std::move(callback).Run(false, "WebUI context lost");
     return;
   }
 
-  // Ensure service is started via manager
   XenonManager* manager = XenonManager::GetInstance();
   if (!manager) {
-     std::move(callback).Run(false, "XenonManager not available");
-     return;
+    std::move(callback).Run(false, "XenonManager not available");
+    return;
   }
-  
-  // Ensure the service is up and running
+
   manager->EnsureServiceStarted(web_ui_->GetWebContents()->GetBrowserContext());
 
-  // Ping the service to verify connection
   manager->Ping(base::BindOnce(
-      [](ConnectToServiceCallback callback, const std::string& response) {
-        if (response.empty() || response.rfind("Error:", 0) == 0) {
-            std::move(callback).Run(false, response);
+      [](PingMainServiceCallback callback, const std::string& response) {
+        if (IsOkPingReply(response)) {
+          std::move(callback).Run(
+              true, "[Main Remote] Ping OK: " + response);
         } else {
-            // Success: response contains pong/status
-            std::move(callback).Run(true, "Connected: " + response);
+          std::move(callback).Run(false, response);
         }
       },
-      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), false, "Service connection failed (callback dropped)")));
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          std::move(callback), false,
+          "Main Remote Ping failed (callback dropped)")));
+}
+
+void XenonPageHandler::TestSharedRemoteDuplicate(
+    TestSharedRemoteDuplicateCallback callback) {
+  LOG(INFO) << "XenonPageHandler: TestSharedRemoteDuplicate requested";
+
+  if (!web_ui_ || !web_ui_->GetWebContents()) {
+    std::move(callback).Run(false, "WebUI context lost");
+    return;
+  }
+
+  XenonManager* manager = XenonManager::GetInstance();
+  if (!manager) {
+    std::move(callback).Run(false, "XenonManager not available");
+    return;
+  }
+
+  manager->EnsureServiceStarted(web_ui_->GetWebContents()->GetBrowserContext());
+
+#if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
+  auto dup = manager->DuplicateServiceRemote();
+  const bool bound = dup.is_bound();
+  std::move(callback).Run(
+      bound, bound ? "[SharedRemote duplicate] is_bound=true (same pipe handle family)"
+                   : "[SharedRemote duplicate] is_bound=false");
+#else
+  std::move(callback).Run(
+      false, "[SharedRemote duplicate] disabled (enable_xenon_manager_shared_remote=false)");
+#endif
+}
+
+void XenonPageHandler::PingAssociatedRemote(
+    PingAssociatedRemoteCallback callback) {
+  LOG(INFO) << "XenonPageHandler: PingAssociatedRemote requested";
+
+  if (!web_ui_ || !web_ui_->GetWebContents()) {
+    std::move(callback).Run(false, "WebUI context lost");
+    return;
+  }
+
+  XenonManager* manager = XenonManager::GetInstance();
+  if (!manager) {
+    std::move(callback).Run(false, "XenonManager not available");
+    return;
+  }
+
+  manager->EnsureServiceStarted(web_ui_->GetWebContents()->GetBrowserContext());
+
+#if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
+  manager->PingAssociated(base::BindOnce(
+      [](PingAssociatedRemoteCallback callback, const std::string& response) {
+        if (IsOkPingReply(response)) {
+          std::move(callback).Run(
+              true, "[Associated Remote] PingAssociated OK: " + response);
+        } else {
+          std::move(callback).Run(false, response);
+        }
+      },
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          std::move(callback), false,
+          "Associated Remote failed (callback dropped)")));
+#else
+  std::move(callback).Run(
+      false,
+      "[Associated Remote] disabled (enable_xenon_associated_side=false)");
+#endif
+}
+
+void XenonPageHandler::TestUtilityToBrowserObserver(
+    TestUtilityToBrowserObserverCallback callback) {
+  LOG(INFO) << "XenonPageHandler: TestUtilityToBrowserObserver requested";
+
+  if (!web_ui_ || !web_ui_->GetWebContents()) {
+    std::move(callback).Run(false, "WebUI context lost");
+    return;
+  }
+
+  XenonManager* manager = XenonManager::GetInstance();
+  if (!manager) {
+    std::move(callback).Run(false, "XenonManager not available");
+    return;
+  }
+
+#if !BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  std::move(callback).Run(
+      false,
+      "[Observer] disabled (enable_xenon_browser_observer=false)");
+  return;
+#endif
+
+  manager->EnsureServiceStarted(web_ui_->GetWebContents()->GetBrowserContext());
+
+  manager->CaptureNextObserverEventForTest(base::BindOnce(
+      [](TestUtilityToBrowserObserverCallback callback,
+         const std::string& observer_message) {
+        if (observer_message.empty()) {
+          std::move(callback).Run(
+              false,
+              "[Observer] no OnServiceEvent (disconnect, blocked, or no Utility push)");
+        } else {
+          std::move(callback).Run(
+              true, "[Observer] OnServiceEvent: " + observer_message);
+        }
+      },
+      std::move(callback)));
+
+  manager->Ping(base::BindOnce([](const std::string& ping_reply) {
+    LOG(INFO) << "Observer test: main Ping finished: " << ping_reply;
+  }));
 }
 
 }  // namespace xenon

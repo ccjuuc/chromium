@@ -7,5 +7,10 @@ import("//xenon_overlay/buildflags/features.gni")
 
 buildflag_header("buildflags") {
   header = "buildflags.h"
-  flags = [ "ENABLE_XENON_SERVICE=$enable_xenon_service" ]
+  flags = [
+    "ENABLE_XENON_SERVICE=$enable_xenon_service",
+    "ENABLE_XENON_MANAGER_SHARED_REMOTE=$enable_xenon_manager_shared_remote",
+    "ENABLE_XENON_ASSOCIATED_SIDE=$enable_xenon_associated_side",
+    "ENABLE_XENON_BROWSER_OBSERVER=$enable_xenon_browser_observer",
+  ]
 }
