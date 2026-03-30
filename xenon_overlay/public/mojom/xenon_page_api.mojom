@@ -1,0 +1,23 @@
+// Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module xenon.mojom;
+
+import "mojo/public/mojom/base/values.mojom";
+
+// Document-scoped host for the renderer `window.xenon` binding (BrowserInterfaceBroker).
+interface XenonPageHost {
+  // Round-trip to the browser process; `ok` false means the host declined or failed.
+  Ping() => (bool ok, string message);
+
+  // Semantic version string for the page API surface (not Chrome version).
+  GetApiVersion() => (string version);
+
+  // JSON-like object round-trip (maps to `base::Value`; renderer uses V8ValueConverter).
+  EchoObject(mojo_base.mojom.Value input) => (mojo_base.mojom.Value output);
+
+  // Wraps `input` as `{"payload": input, "browser_routing_id": N}` for demo metadata.
+  WrapObjectWithBrowserMeta(mojo_base.mojom.Value input) =>
+      (mojo_base.mojom.Value output);
+};

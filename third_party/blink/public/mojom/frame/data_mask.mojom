@@ -1,0 +1,52 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+//
+// Frame-level data masking / DLP-style policy payloads (regex + dictionary +
+// XPath scope). Embedders route these via BrowserInterfaceBroker; matching and
+// rendering are implemented outside this file.
+
+module blink.mojom;
+
+enum MaskType {
+  kReplace,
+  kBlur,
+};
+
+struct MaskItem {
+  uint32 tag_id;
+  string policy_name;
+  bool regs_is_and;
+  array<string> regs;
+  array<string> regs_xor;
+  bool regs_xor_is_and;
+  array<string> dicts;
+  bool dicts_fuzzy_compare;
+  MaskType mask_type;
+  uint32 replace_begin;
+  uint32 replace_end;
+  string replace_text;
+  bool recover;
+  bool is_content_mask;
+  bool is_column_name_mask;
+  bool is_column_value_mask;
+};
+
+struct XPathConfig {
+  array<string> disable_list;
+  array<string> white_list;
+  array<string> download_list;
+};
+
+struct DataMaskRules {
+  array<MaskItem> mask_items;
+};
+
+interface DataMask {
+  SendData(int32 request_id, DataMaskRules data);
+  SendXpathData(XPathConfig data);
+};
+
+interface DataMaskToMain {
+  SendDataToMain(int32 request_id, string data);
+};

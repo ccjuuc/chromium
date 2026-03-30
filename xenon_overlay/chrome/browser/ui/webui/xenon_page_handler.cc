@@ -1,10 +1,13 @@
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_page_handler.h"
 
 #include "build/buildflag.h"
+#include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
+#include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 
 namespace xenon {
@@ -181,6 +184,63 @@ void XenonPageHandler::TestUtilityToBrowserObserver(
   manager->Ping(base::BindOnce([](const std::string& ping_reply) {
     LOG(INFO) << "Observer test: main Ping finished: " << ping_reply;
   }));
+}
+
+void XenonPageHandler::TestDataMask(TestDataMaskCallback callback) {
+  LOG(INFO) << "XenonPageHandler: TestDataMask requested";
+
+  if (!web_ui_ || !web_ui_->GetWebContents()) {
+    std::move(callback).Run(false, "WebUI context lost");
+    return;
+  }
+
+  Profile* profile = Profile::FromBrowserContext(
+      web_ui_->GetWebContents()->GetBrowserContext());
+      
+  if (profile) {
+    XenonWebDialog::ShowDataMaskTest(profile);
+    std::move(callback).Run(true, "Data Mask Test Dialog opened (Baidu)");
+  } else {
+    std::move(callback).Run(false, "No Profile found");
+  }
+}
+
+void XenonPageHandler::OpenComponentExtensionDialog(
+    OpenComponentExtensionDialogCallback callback) {
+  LOG(INFO) << "XenonPageHandler: OpenComponentExtensionDialog requested";
+
+  if (!web_ui_ || !web_ui_->GetWebContents()) {
+    std::move(callback).Run(false, "WebUI context lost");
+    return;
+  }
+
+  Profile* profile = Profile::FromBrowserContext(
+      web_ui_->GetWebContents()->GetBrowserContext());
+  if (!profile) {
+    std::move(callback).Run(false, "No profile");
+    return;
+  }
+
+  XenonExtensionManager* extension_manager = XenonExtensionManager::GetInstance();
+  if (!extension_manager) {
+    std::move(callback).Run(false, "XenonExtensionManager not available");
+    return;
+  }
+
+  if (!extension_manager->ShowExtension(profile)) {
+    std::move(callback).Run(
+        false,
+        "ShowExtension failed — component extension not in registry yet. "
+        "Restart without --show-xenon-extension so PostProfileInit loads it, "
+        "then open this WebUI again.");
+    return;
+  }
+
+  std::move(callback).Run(
+      true,
+      "Opened extension WebDialog (chrome-extension://…/index.html). "
+      "Use popup buttons or DevTools → Extensions → service worker for "
+      "chrome.xenonPrivate.ping.");
 }
 
 }  // namespace xenon

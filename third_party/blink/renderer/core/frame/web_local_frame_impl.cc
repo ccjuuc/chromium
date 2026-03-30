@@ -194,6 +194,7 @@
 #include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
+#include "third_party/blink/renderer/core/frame/data_mask.h"
 #include "third_party/blink/renderer/core/frame/find_in_page.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
 #include "third_party/blink/renderer/core/frame/intervention.h"
@@ -2291,6 +2292,7 @@ WebLocalFrameImpl::WebLocalFrameImpl(
       local_frame_client_(MakeGarbageCollected<LocalFrameClientImpl>(this)),
       find_in_page_(
           MakeGarbageCollected<FindInPage>(*this, interface_registry)),
+      data_mask_(MakeGarbageCollected<DataMask>(*this, interface_registry)),
       interface_registry_(interface_registry),
       input_method_controller_(*this),
       spell_check_panel_host_client_(nullptr),
@@ -2321,6 +2323,7 @@ WebLocalFrameImpl::~WebLocalFrameImpl() {
 void WebLocalFrameImpl::Trace(Visitor* visitor) const {
   visitor->Trace(local_frame_client_);
   visitor->Trace(find_in_page_);
+  visitor->Trace(data_mask_);
   visitor->Trace(frame_);
   visitor->Trace(dev_tools_agent_);
   visitor->Trace(frame_widget_);
@@ -2948,6 +2951,8 @@ void WebLocalFrameImpl::WillBeDetached() {
     dev_tools_agent_->WillBeDestroyed();
   if (find_in_page_)
     find_in_page_->Dispose();
+  if (data_mask_)
+    data_mask_->Dispose();
   if (print_client_)
     print_client_->WillBeDestroyed();
 

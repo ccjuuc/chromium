@@ -13,6 +13,7 @@ import("//content/public/common/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//media/media_options.gni")
 import("//pdf/features.gni")
+import("//xenon_overlay/buildflags/features.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//third_party/widevine/cdm/widevine.gni")
 import("//tools/grit/grit_rule.gni")
@@ -234,7 +235,12 @@ static_library("renderer") {
     "//third_party/widevine/cdm:buildflags",
     "//ui/gfx/geometry",
     "//v8",
+    "//xenon_overlay/buildflags:buildflags",
   ]
+
+  if (enable_xenon_service) {
+    deps += [ "//xenon_overlay/chrome/renderer:renderer" ]
+  }
 
   if (is_mac || is_win || is_linux || is_chromeos) {
     deps += [ "//components/webapps/isolated_web_apps:scheme" ]

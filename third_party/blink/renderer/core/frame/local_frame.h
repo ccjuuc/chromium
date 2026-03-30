@@ -53,6 +53,7 @@
 #include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/frame/data_mask.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/media_player_action.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/reporting_observer.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/sudden_termination_disabler_type.mojom-blink-forward.h"
@@ -142,6 +143,7 @@ class InspectorTaskRunner;
 class InspectorTraceEvents;
 class InterfaceRegistry;
 class LCPCriticalPathPredictor;
+class DataMaskSubtreeObserver;
 class LCPScriptObserver;
 class LayoutView;
 class LocalDOMWindow;
@@ -500,6 +502,15 @@ class CORE_EXPORT LocalFrame final
   BrowserInterfaceBrokerProxy& GetBrowserInterfaceBroker();
 
   InterfaceRegistry* GetInterfaceRegistry() { return interface_registry_; }
+
+  void SetDataMaskRules(mojom::blink::DataMaskRulesPtr rules);
+  const mojom::blink::DataMaskRules* GetDataMaskRules() const;
+  void SetDataMaskXPathConfig(mojom::blink::XPathConfigPtr config);
+  const mojom::blink::XPathConfig* GetDataMaskXPathConfig() const;
+
+  // DataMask: while the frame is loading, re-run masking on the loader queue.
+  void ScheduleDataMaskApplyPumpIfNeeded();
+  void RunDataMaskApplyPump();
 
   // Returns an AssociatedInterfaceProvider the frame can use to request
   // navigation-associated interfaces from the browser. Messages transmitted
@@ -1120,6 +1131,19 @@ class CORE_EXPORT LocalFrame final
   Member<LCPScriptObserver> script_observer_;
 
   HistoryUserActivationState history_user_activation_state_;
+
+  mojom::blink::DataMaskRulesPtr data_mask_rules_;
+  mojom::blink::XPathConfigPtr data_mask_xpath_config_;
+
+  void EnsureDataMaskSubtreeObserver();
+  void ClearDataMaskMutationObserver();
+
+  friend CORE_EXPORT void ApplyDataMaskForLocalFrame(LocalFrame&);
+  friend CORE_EXPORT void ResetDataMaskPresentationState(LocalFrame&);
+  bool data_mask_document_visibility_suppressed_ = false;
+  bool data_mask_load_pump_scheduled_ = false;
+
+  Member<DataMaskSubtreeObserver> data_mask_mutation_observer_;
 
   InterfaceRegistry* const interface_registry_;
 

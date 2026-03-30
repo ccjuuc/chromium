@@ -73,6 +73,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/exported/web_input_method_controller_impl.h"
+#include "third_party/blink/renderer/core/frame/data_mask.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/web_remote_frame_impl.h"
 #include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
@@ -694,6 +695,7 @@ class CORE_EXPORT WebLocalFrameImpl final
   WebContentSettingsClient* content_settings_client_ = nullptr;
 
   Member<FindInPage> find_in_page_;
+  Member<DataMask> data_mask_;
 
   // Optional weak pointer to the WebPrintClient that initiated printing. Only
   // valid when |is_in_printing_| is true.

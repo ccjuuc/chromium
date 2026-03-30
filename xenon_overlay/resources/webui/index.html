@@ -24,19 +24,30 @@
     <div class="content">
       <div class="hero-section">
         <h1>Welcome to Xenon</h1>
-        <p>Mojo / Remote 自测（四项独立）</p>
+        <p>Mojo（四项）+ 页面 <code>window.xenon</code>（XenonPageHost，含 Value 对象 API）。⑩ 通过 Browser 打开 <code>chrome-extension://…/index.html</code>，与扩展 popup 交互（如 <code>xenonPrivate.ping</code>）。</p>
         <div class="test-grid">
           <button id="test-main-remote" class="primary-btn">① Main Remote · Ping</button>
           <button id="test-shared-remote" class="primary-btn secondary-outline">② SharedRemote duplicate</button>
           <button id="test-associated" class="primary-btn secondary-outline">③ Associated Remote</button>
           <button id="test-observer" class="primary-btn secondary-outline">④ Utility→Browser Observer</button>
+          <button id="test-page-host-ping" class="primary-btn secondary-outline">⑤ window.xenon · Ping</button>
+          <button id="test-page-host-version" class="primary-btn secondary-outline">⑥ window.xenon · getApiVersion</button>
+          <button id="test-page-host-echo-object" class="primary-btn secondary-outline">⑦ window.xenon · echoObject</button>
+          <button id="test-page-host-wrap-object" class="primary-btn secondary-outline">⑧ window.xenon ·
+            wrapObjectWithBrowserMeta</button>
+          <button id="test-data-mask" class="primary-btn secondary-outline">⑨ Data Mask Test</button>
+          <button id="open-component-extension" class="primary-btn secondary-outline">⑩ 打开内置扩展（WebDialog）</button>
         </div>
       </div>
 
       <div class="status-card">
         <div class="status-item">
-          <span class="label">Last result</span>
+          <span class="label">Mojo 自测结果</span>
           <span id="status-text" class="value ready">Ready</span>
+        </div>
+        <div class="status-item">
+          <span class="label">window.xenon（页面 API）</span>
+          <span id="xenon-api-status" class="value ready">—</span>
         </div>
       </div>
     </div>

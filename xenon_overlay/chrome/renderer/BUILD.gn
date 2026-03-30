@@ -1,0 +1,31 @@
+# Copyright 2026 The Xenon Overlay Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//xenon_overlay/buildflags/features.gni")
+
+source_set("renderer") {
+  sources = [
+    "js_xenon_api.cc",
+    "js_xenon_api.h",
+    "xenon_data_mask_js_conversions.cc",
+    "xenon_data_mask_js_conversions.h",
+    "xenon_render_frame_observer.cc",
+    "xenon_render_frame_observer.h",
+  ]
+
+  deps = [
+    "//base",
+    "//content/public/common",
+    "//content/public/renderer",
+    "//gin",
+    "//mojo/public/cpp/bindings",
+    "//third_party/blink/public:blink",
+    "//third_party/blink/public/common",
+    "//third_party/blink/renderer/core:core",
+    "//url",
+    "//v8",
+    "//xenon_overlay/buildflags:buildflags",
+    "//xenon_overlay/public/mojom",
+  ]
+}

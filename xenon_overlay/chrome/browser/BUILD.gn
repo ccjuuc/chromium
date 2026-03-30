@@ -22,6 +22,12 @@ source_set("xenon_common_bubble") {
 source_set("browser") {
   defines = []
   sources = [
+    "xenon_data_mask_to_main_host_impl.cc",
+    "xenon_data_mask_to_main_host_impl.h",
+    "xenon_frame_interface_binder.cc",
+    "xenon_frame_interface_binder.h",
+    "xenon_page_host_impl.cc",
+    "xenon_page_host_impl.h",
     "xenon_browser_main_extra_parts.cc",
     "xenon_browser_main_extra_parts.h",
     "xenon_extension_manager.cc",

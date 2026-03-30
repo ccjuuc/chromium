@@ -79,6 +79,7 @@
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/fileapi/public_url_manager.h"
 #include "third_party/blink/renderer/core/frame/frame.h"
+#include "third_party/blink/renderer/core/frame/data_mask_applier.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -413,6 +414,9 @@ std::optional<KURL> LocalFrameClientImpl::DispatchWillSendRequest(
 void LocalFrameClientImpl::DispatchDidDispatchDOMContentLoadedEvent() {
   if (web_frame_->Client()) {
     web_frame_->Client()->DidDispatchDOMContentLoadedEvent();
+  }
+  if (LocalFrame* frame = web_frame_->GetFrame()) {
+    ApplyDataMaskForLocalFrame(*frame);
   }
 }
 

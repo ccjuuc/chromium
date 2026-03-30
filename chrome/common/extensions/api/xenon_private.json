@@ -1,0 +1,27 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+[
+  {
+    "namespace": "xenonPrivate",
+    "description": "Xenon embedder private API (component extension to browser).",
+    "functions": [
+      {
+        "name": "ping",
+        "type": "function",
+        "description": "Returns a fixed string if the Xenon private API is wired correctly.",
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "parameters": [
+            {
+              "name": "response",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

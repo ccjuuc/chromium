@@ -32,6 +32,7 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/common/buildflags.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_features.h"
@@ -73,6 +74,9 @@
 #include "chrome/renderer/websocket_handshake_throttle_provider_impl.h"
 #include "chrome/renderer/webui_browser/webui_browser_renderer_extension.h"
 #include "chrome/renderer/worker_content_settings_client.h"
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/renderer/xenon_render_frame_observer.h"
+#endif
 #include "chrome/services/speech/buildflags/buildflags.h"
 #include "components/autofill/content/renderer/autofill_agent.h"
 #include "components/autofill/content/renderer/password_autofill_agent.h"
@@ -588,6 +592,10 @@ void ChromeContentRendererClient::RenderFrameCreated(
   ChromeRenderFrameObserver* render_frame_observer =
       new ChromeRenderFrameObserver(render_frame, web_cache_impl_.get());
   service_manager::BinderRegistry* registry = render_frame_observer->registry();
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  new xenon::XenonRenderFrameObserver(render_frame);
+#endif
 
   new prerender::NoStatePrefetchRenderFrameObserver(render_frame);
 

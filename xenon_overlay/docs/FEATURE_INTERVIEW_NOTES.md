@@ -12,7 +12,10 @@
    · [3.6 三种 Browser↔Utility 路径归纳（主接口 / Associated / Observer）](#36-三种-browserutility-路径归纳主接口--associated--observer)
 4. [Mojo 服务：`XenonMainService` 全链路](#4-mojo-服务xenonmainservice-全链路)
 5. [WebUI](#5-webui)
-6. [内置扩展](#6-内置扩展)
+6. [内置扩展（Component Extension）](#6-内置扩展component-extension)  
+   · [6.5 扩展与 Browser 原生对接的可选路径](#65-扩展与-browser-原生对接的可选路径)  
+   · [6.6 添加自定义 Extension API 的详细步骤](#66-添加自定义-extension-api-的详细步骤)  
+   · [6.7 示例：`chrome.xenonPrivate` 涉及文件](#67-示例chromexenonprivate-涉及文件)
 7. [`XenonWebDialog`](#7-xenonwebdialog)
 8. [提醒 / Tip UI](#8-提醒--tip-ui)
 9. [`XenonCommonBubble`](#9-xenoncommonbubble)
@@ -32,7 +35,7 @@ Xenon 是 **打进 Chrome 多进程模型** 的 overlay，而非独立 exe：
 | **Browser** | `BrowserMainExtraParts`：WebUI、pak、`XenonManager`、提醒观察者等 |
 | **Utility** | `ServiceFactory` + `XenonServiceImpl`，与 Browser **Mojo** 通信 |
 | **资源** | `grd` → `xenon_resources.pak`；安装器在 Linux/macOS 带入包内 |
-| **扩展** | Component Extension 管线、allowlist、多路径与 update URL |
+| **扩展** | **§6**：`ComponentLoader` 装载内置目录；与 Utility / 页面 Mojo **分离**；自定义扩展↔Browser API **未实现** |
 
 **一句话**：Browser 编排 + Utility 隔离服务 + GRIT 资源 + 可选内置扩展。
 
@@ -323,9 +326,220 @@ sequenceDiagram
 
 ---
 
-## 6. 内置扩展
+## 6. 内置扩展（Component Extension）
 
-`ComponentExtensionManager` + `ComponentExtensionConfigBuilder`；`ComponentLoader`；**allowlist**；多路径、`update_check_url`。
+Xenon 内置扩展走的是 Chromium **组件扩展**管线：由 Browser 进程在 **Profile 就绪后** 调用 `extensions::ComponentLoader::Add`，把 **磁盘上的扩展目录**（manifest + JS/CSS/HTML）注册进 **`ExtensionRegistry`**。它与 **§4 `XenonMainService`（Utility）**、**页面内 `window.xenon`（Renderer Mojo）** 仍是 **不同通道**；此外本分支在 Chromium 中注册了 **embedder 私有扩展 API `chrome.xenonPrivate`**（步骤见 **§6.6–6.7**），供组件扩展在 **Browser 进程**执行自定义逻辑。
+
+### 6.1 资源与产物路径
+
+| 源码 | 运行时（相对 `DIR_MODULE`） |
+|------|------------------------------|
+| `xenon_overlay/resources/extension/manifest.json` 等 | `resources/xenon_extension/`（由 `xenon_overlay/resources/BUILD.gn` 的 `copy_extension` / macOS `bundle_data` 拷贝） |
+
+默认配置里 **`builtin_path`** 为 `"resources/xenon_extension"`（见 `xenon_extension_manager.cc` 内 `CreateXenonConfig()`）。扩展为 **Manifest V3**：`background.service_worker`、`action.default_popup` 指向 `index.html` + `background.js`。
+
+### 6.2 核心类与职责
+
+| 类 | 文件 | 职责 |
+|----|------|------|
+| **`XenonExtensionManager`** | `xenon_extension_manager.{h,cc}` | **单例**；构造时 `RegisterExtension("Xenon Overlay Extension", CreateXenonConfig())`；对外封装 `LoadExtension*`、`FindExtension`、`ShowExtension`、`CheckForUpdates` |
+| **`ComponentExtensionManager`** | 同上 | **可多扩展**：`RegisterExtension` 维护 `configs_`；路径解析、加载、更新逻辑 |
+| **`ComponentExtensionConfig` / Builder** | 同上 | `extension_name`、`expected_extension_id`（预留校验）、`builtin_path`、`additional_builtin_paths`、`user_data_subdir`、`update_check_url` |
+
+加载时 **`AddExtensionWithManifest`**：`extensions::ComponentLoader::Get(profile)->Add(std::move(manifest), path)`，与 Chrome 内置 PDF、翻译类组件扩展同一套机制。
+
+### 6.3 启动与展示（与 Browser 的交接点）
+
+**文件**：`xenon_browser_main_extra_parts.cc`
+
+- **默认**（无 `--show-xenon-extension`）：`XenonExtensionManager::LoadExtensionFromDefaultPath(profile, callback)` → 异步在 **ThreadPool** 上 `DetermineBestExtensionPath`（内置路径 **vs** `Profile` 下 `user_data_subdir` 中的更新包，取 **较高 version**）→ UI 线程 **`ComponentLoader::Add`**。
+- **`--show-xenon-extension`**：**不**走上述加载分支，改为 **`XenonWebDialog::ShowXenonOverlay`**（WebUI 浮层，见 **§7** 相关说明）。
+
+**`ShowExtension`**（管理器 API）：在 **Registry** 里按 **`Extension::name()`** 匹配配置里的 `extension_name`，若找到则：
+
+```text
+XenonWebDialog::Show(context, extension->GetResourceURL("index.html"), width, height, title)
+```
+
+并在配置了 **`update_check_url`** 时触发 **`CheckForUpdates`**（`SimpleURLLoader` 拉更新 JSON → 下载 zip → `UnzipService` 解压到用户目录，下次启动路径优选新版本）。
+
+### 6.4 扩展 JS 与「Browser」交互的现状
+
+- **标准 API**：`chrome.runtime`、`storage`、`activeTab` 等。
+- **Embedder API**：manifest 声明 **`"xenonPrivate"`** 后，可在 **service worker / popup** 调用 **`chrome.xenonPrivate.ping(callback)`**，进入 Browser 侧 **`XenonPrivatePingFunction`**（示例返回固定字符串，可改为调用 `XenonManager` 等）。
+
+**通道对照（面试）**
+
+| 通道 | 起点 | 终点 | 说明 |
+|------|------|------|------|
+| **`chrome.xenonPrivate.*`** | 扩展 JS | **Browser** `ExtensionFunction` | **`location: component`** 的私有 permission，与 Utility 无关 |
+| **页面 `window.xenon`** | 普通网页 JS | Renderer Mojo → Browser | DataMask 等，**不是**扩展 API |
+| **`XenonMainService`** | `XenonManager` | Utility | 见 **§4** |
+
+扩展 **不会**自动接到 `XenonMainService`；若要在 `xenonPrivate` 里起 Utility 调用，需在对应 **`ExtensionFunction::Run()`** 内显式调 `XenonManager`（注意 **GN 依赖**避免循环）。
+
+### 6.5 扩展与 Browser 原生对接的可选路径
+
+在 Chromium 中常见做法如下（按侵入性大致递增）：
+
+1. **不做原生桥接**  
+   扩展只做 UI；需要调策略时 **打开或聚焦** 已有 **WebUI**（`chrome://…`），由 WebUI 的 **Mojo** 与 Browser 通信。扩展与 WebUI 之间仍可用 **URL 参数** 或 **`chrome.storage`** 等协调（需同 profile、注意安全边界）。
+
+2. **Native Messaging**  
+   在 manifest 中声明 **native host**，由单独二进制或已有 Browser 侧服务收发信息。适合「扩展 ↔ 本机进程」而非大块 UI。
+
+3. **新增自定义 Extension API**（`chrome.xxx.*`）  
+   在 `chrome/common/extensions/api` 增加 JSON schema，Browser 侧实现 **`ExtensionFunction`**；**注册**由 **`ChromeGeneratedFunctionRegistry`** 根据 schema + `*_api.h` 自动生成，无需手写 `RegisterFunction`。**完整步骤见 §6.6**，本仓库示例见 **§6.7**。
+
+4. **`externally_connectable` + messaging**  
+   限定 web origin 与扩展互发消息；适合与**指定 HTTPS 页面**联动，仍需页面侧配合。
+
+**总结**：`xenon_extension_manager` 只负责 **装载与更新**；**扩展可调 Browser C++ 的 `chrome.*` API** 按 **§6.6** 在 `chrome/` 树内注册；**WebUI / 页面** 走 **Mojo**（§5、§7），不是同一套机制。
+
+### 6.6 添加自定义 Extension API 的详细步骤
+
+下面描述如何在 **Chromium / Chrome** 嵌入层新增 **`chrome.<命名空间>.<方法>`**（由 **Browser 进程**的 **`ExtensionFunction`** 执行）。本仓库的 **`chrome.xenonPrivate`** 即按此链路实现（文件索引见 **§6.7**）。
+
+**与 WebUI 的区别**（勿混）：扩展里写的是 **`chrome.xxx`**；`chrome://xenon-overlay/` 里 **`PageHandler` Mojo** 是 **WebUI↔Browser**，**不经** Extension API registry。
+
+---
+
+#### 前置条件
+
+- 构建需打开 **`enable_extensions`**（桌面 Chrome 默认满足）。
+- 新 API 的 **permission 名**、**mojom 枚举值**、**直方图枚举值** 一经发布应避免 **删除或改序**（Chromium 有稳定性约定）。
+- JSON 里 **`namespace`** 驼峰命名 → JS 为 **`chrome.<namespace>`**（如 `xenonPrivate` → `chrome.xenonPrivate`）。
+
+---
+
+#### 步骤 1：编写 API Schema（JSON）
+
+- **路径**：`chrome/common/extensions/api/<file>.json`（与现有 `command_line_private.json`、`xenon_private.json` 并列）。
+- **内容**：顶层为数组，内含对象：
+  - **`namespace`**：驼峰，与 manifest 里 permission 字符串通常对应（如 permission `xenonPrivate` 对应 namespace `xenonPrivate`）。
+  - **`functions`**：每个函数含 `name`、`type: "function"`、`parameters`（可省略）、`returns` 或 **`returns_async`**（扩展常见为异步回调）。
+- **注意（易踩坑）**：若函数 **没有任何 `parameters`**，code generator **不会**生成 **`SomeFunction::Params`**。实现 **`Run()`** 时 **不要**写 `Foo::Params::Create(args())`；只使用生成的 **`Foo::Results`**（或同步返回类型）。有参数时再用 `std::optional<...::Params>` + `EXTENSION_FUNCTION_VALIDATE`。
+
+---
+
+#### 步骤 2：把 Schema 编进 Chrome API 编译列表
+
+- 编辑 **`chrome/common/extensions/api/api_sources.gni`**，在 **`if (enable_extensions) { schema_sources_ += [ ... ] }`** 块中加入你的 **`"<name>.json"`**。
+- （可选）**`chrome/common/extensions/api/generated_externs_list.txt`** 增加一行，供旧式 externs 生成。
+
+保存后 **`function_registration("api_registration")`** 与 **`generated_types`** 会拾取该 JSON，在 **`//chrome/common/extensions/api`** 生成 **`chrome/common/extensions/api/<namespace_snake>.h`** 等（具体子目录规则与 json 文件名一致）。
+
+---
+
+#### 步骤 3：声明 API Feature 与 Permission Feature
+
+- **`chrome/common/extensions/api/_api_features.json`**  
+  为你的 **`namespace`** 增加一项，例如：
+  - **`dependencies`**：`["permission:你的Permission名"]`（须与 manifest 中字符串一致，一般为 camelCase）。
+  - **`contexts`**：多为 **`["privileged_extension"]`**（与现有 private API 一致）。
+- **`chrome/common/extensions/api/_permission_features.json`**  
+  增加 **`"你的Permission名"`** 对象，典型字段：
+  - **`channel`**：`"stable"`
+  - **`extension_types`**：`["extension", "legacy_packaged_app", "platform_app"]` 等
+  - **`location`**：仅 **组件扩展** 使用时填 **`"component"`**（与 `commandLinePrivate`、`xenonPrivate` 同类）
+  - **`platforms`**：如 **`["chromeos", "linux", "mac", "win"]`**，按需裁剪
+
+未正确配置时，扩展侧会报 **API 不可用** 或 **permission 无效**。
+
+---
+
+#### 步骤 4：权限 ID（mojom）与 ExtensionPermission3 直方图
+
+- 编辑 **`extensions/common/mojom/api_permission_id.mojom`**：在 **`APIPermissionID` 末尾**（注释 *Add new entries at the end* 之前）增加 **`kYourPermission = <下一个整数>`**。  
+  **禁止** 删除或重排已有枚举项。
+- 在仓库根目录执行：
+
+```bash
+python3 tools/metrics/histograms/update_extension_permission.py
+```
+
+  用于把 **`ExtensionPermission3`** 与 mojom 同步到 **`tools/metrics/histograms/metadata/extensions/enums.xml`**（若脚本失败再手工核对）。
+
+---
+
+#### 步骤 5：ExtensionFunction 直方图枚举（HistogramValue）
+
+- 编辑 **`extensions/browser/extension_function_histogram_value.h`**：在 **`ENUM_BOUNDARY` 之前** 增加一项。
+  - 命名规则（官方注释）：取 **`DECLARE_EXTENSION_FUNCTION`** 第一个字符串参数，把 **`.` 换成 `_`**，**全大写**。  
+    例：`"xenonPrivate.ping"` → **`XENONPRIVATE_PING`**。
+  - **禁止** 改动已有枚举条目的顺序或数值。
+- 编辑 **`tools/metrics/histograms/metadata/extensions/enums.xml`** 中 **`<enum name="ExtensionFunctions">`**，增加对应 **`<int value="…" label="…"/>`**，**数值与 `.h` 一致**。
+- （推荐）执行：
+
+```bash
+python3 tools/metrics/histograms/update_extension_histograms.py
+```
+
+---
+
+#### 步骤 6：在 Chrome 里注册「权限字符串 → APIPermissionID」与安装提示文案
+
+- **`chrome/common/extensions/permissions/chrome_api_permissions.cc`**  
+  在 **`permissions_to_register[]`** 中加入一行：`{APIPermissionID::kYourPermission, "yourPermission", flags}`，**字符串与 manifest / _permission_features 一致**。
+- **`chrome/common/extensions/permissions/chrome_permission_message_rules.cc`**  
+  增加一条 **`ChromePermissionMessageRule`**：`IDS_EXTENSION_PROMPT_WARNING_...` + **`{APIPermissionID::kYourPermission}`**。
+- **`chrome/app/generated_resources.grd`**  
+  增加 **`IDS_EXTENSION_PROMPT_WARNING_...`** 的人类可读说明（安装/权限列表用）。
+
+---
+
+#### 步骤 7：Browser 侧实现 `ExtensionFunction` 并加入 GN
+
+- **目录约定**：`chrome/browser/extensions/api/<api_dir>/`，且存在 **`<api_dir>_api.h`**（与 **`function_registration`** 的 **`impl_dir`** 探测规则一致；与 **`xenon_private`**、`command_line_private` 同级）。
+- **头文件**：`class YourFunction : public ExtensionFunction`，并写  
+  **`DECLARE_EXTENSION_FUNCTION("namespace.method", HISTOGRAM_ENUM_VALUE)`**（与 §5 直方图一致）。
+- **实现文件**：`#include "chrome/common/extensions/api/<生成头>.h"`（一般为 json 基名对应命名空间），在 **`Run()`** 中解析参数（若有）、调用 Browser 逻辑，**`RespondNow` / `RespondLater`** 返回。
+- **新建** **`BUILD.gn`**：`source_set`，`deps` 至少含 **`//chrome/common/extensions/api`**、**`//extensions/browser`**（按需追加 `//chrome/browser/...`）。
+- **注册进 Chrome**：编辑 **`chrome/browser/extensions/api/BUILD.gn`**，在 **`group("api_implementations")`** 的 **`if (enable_extensions)`** 块内 **`deps += [ "//chrome/browser/extensions/api/<your_target>" ]`**。
+
+**自动注册**：**无须**手写 `RegisterFunction`。**`ChromeExtensionsBrowserAPIProvider`** 会调用 **`ChromeGeneratedFunctionRegistry::RegisterAll`**，只要 schema 在 **`api_registration` 的 sources** 里且存在对应的 **`*_api.h`** 实现类，生成代码会挂上。
+
+---
+
+#### 步骤 8：单测 / 权限集合测试
+
+- **`chrome/common/extensions/permissions/permission_set_unittest.cc`**  
+  与其它 **`*Private`** 一样，对 **`kYourPermission`** 执行 **`skip.insert(...)`**，避免单测误报。
+
+---
+
+#### 步骤 9：扩展侧 manifest 与 JS
+
+- **`manifest.json`** 的 **`permissions`**（或 **`optional_permissions`）** 数组中加入 **与 `_permission_features` 完全一致的字符串**（如 **`xenonPrivate`**）。
+- **Service worker / popup** 中通过 **`chrome.<namespace>.<method>(...)`** 调用；异步 API 使用回调或 Promise（视生成绑定而定）。
+
+---
+
+#### 步骤 10：编译与手动验证
+
+- 全量或增量编译 **`chrome`**（或至少包含 **`//chrome/browser/extensions/api`** 与 **`//chrome/common/extensions/api`**）。
+- 用 **未禁用扩展** 的配置启动；在 **`chrome://extensions`** 打开 **Service Worker 控制台** 或通过 popup 调用新 API。
+- **组件扩展**：若 permission 为 **`location: component`**，需确保扩展由 **`ComponentLoader`** 加载，否则 **`chrome.<ns>`** 可能仍不可见。
+
+---
+
+### 6.7 示例：`chrome.xenonPrivate` 涉及文件
+
+| 类别 | 路径 |
+|------|------|
+| Schema | `chrome/common/extensions/api/xenon_private.json` |
+| schema 列表 | `chrome/common/extensions/api/api_sources.gni` |
+| Feature | `chrome/common/extensions/api/_api_features.json`、`_permission_features.json` |
+| 权限 ID | `extensions/common/mojom/api_permission_id.mojom`（`kXenonPrivate`） |
+| 直方图 | `extensions/browser/extension_function_histogram_value.h`（`XENONPRIVATE_PING`）、`tools/metrics/histograms/metadata/extensions/enums.xml` |
+| 权限注册 / 文案 | `chrome/common/extensions/permissions/chrome_api_permissions.cc`、`chrome_permission_message_rules.cc`、`chrome/app/generated_resources.grd` |
+| Browser 实现 | `chrome/browser/extensions/api/xenon_private/xenon_private_api.{h,cc}`、`BUILD.gn` |
+| api_implementations | `chrome/browser/extensions/api/BUILD.gn` → `deps` 含 `xenon_private` |
+| 单测 skip | `chrome/common/extensions/permissions/permission_set_unittest.cc` |
+| 可选 externs | `chrome/common/extensions/api/generated_externs_list.txt` |
+| 内置扩展 | `xenon_overlay/resources/extension/manifest.json`（`xenonPrivate`）、`background.js` / `index.html` / `main.js` |
+
+**新增 `xenonPrivate` 下的第二个方法**：只改 **`xenon_private.json`** → 全量生成 → 新建 **`ExtensionFunction` 子类** + **`DECLARE_EXTENSION_FUNCTION`** + **直方图末尾新枚举** + **`enums.xml`**，**无需**再改 mojom 除非引入新 permission。
 
 ---
 
@@ -375,9 +589,9 @@ sequenceDiagram
 
 **三句话**
 
-1. Browser：`ExtraParts` 注册 WebUI、pak、`XenonManager`、提醒观察者。  
+1. Browser：`ExtraParts` 注册 WebUI、pak、`XenonManager`、提醒观察者、**组件扩展加载**（**§6**）。  
 2. Utility：`services.cc` + `XenonServiceImpl` + `Receiver` / 可选 `AssociatedReceiver` / 可选 `Remote<Observer>`。  
-3. 交付：GRIT + 安装包；扩展 component 管线；**可按 GN 跑 `unit_tests` 做 `XenonManager` 轻量验证**（**§3.6**）。
+3. 交付：GRIT + 安装包；扩展走 **标准 `chrome.*`**，**非** `XenonMainService`；**可按 GN 跑 `unit_tests` 做 `XenonManager` 轻量验证**（**§3.6**）。
 
 **FAQ（方向）**
 
@@ -388,6 +602,7 @@ sequenceDiagram
 | `AssociatedRemote` 何时用？ | 要与主接口 **同 pipe 同序** 的第二条接口（§3.4）。 |
 | Utility 怎样回调 Browser？ | **`XenonBrowserObserver`**：`SetBrowserObserver` 注册后 Utility 持 **`Remote`** 调 **`OnServiceEvent`**（§3.6）；可按 **`enable_xenon_browser_observer`** 关闭。 |
 | `Ping` 失败？ | 进程是否起来、`disconnect_handler`、mojom 是否进 utility、沙箱日志。 |
+| 内置扩展和 `window.xenon` 是一回事吗？ | **不是**。组件扩展可用 **`chrome.xenonPrivate`**（Browser `ExtensionFunction`，步骤 **§6.6–6.7**）；**`window.xenon`** 仍是页面 Mojo，二者不互通。 |
 | 主程序与单测？ | 验证 **`XenonManagerTest`** 只需编/跑 **`unit_tests.exe`**，**不必**启动 **`chrome.exe`**（§3.6）。 |
 
 ---
@@ -412,4 +627,4 @@ sequenceDiagram
 
 ---
 
-*生成说明：随分支演进用 `git log` / `git diff` 增量更新 §13 与实现细节；Mojo 客户端以 `//mojo/public/cpp/bindings/*.h` 与当前 **`xenon_manager` / `xenon_service_impl` / `features.gni`** 为准；**§3.6** 与 **§11** 应与 `BUILDFLAG` 及 `xenon_manager_unittest.cc` 保持同步。*
+*生成说明：随分支演进用 `git log` / `git diff` 增量更新 §13 与实现细节；Mojo 客户端以 `//mojo/public/cpp/bindings/*.h` 与当前 **`xenon_manager` / `xenon_service_impl` / `features.gni`** 为准；**§3.6** 与 **§11** 应与 `BUILDFLAG` 及 `xenon_manager_unittest.cc` 保持同步；**新增 Extension API** 时按 **§6.6** 核对 `api_permission_id.mojom`、直方图与 `_permission_features`，并运行 **`update_extension_permission.py` / `update_extension_histograms.py`**。*

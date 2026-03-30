@@ -20,4 +20,13 @@ interface PageHandler {
   // ④ Utility → Browser: registers for next OnServiceEvent, then triggers Ping
   // so XenonServiceImpl pushes XenonBrowserObserver.OnServiceEvent.
   TestUtilityToBrowserObserver() => (bool success, string message);
+
+  // ⑤ Test Data Mask: Opens a test dialog and triggers DataMask IPC.
+  TestDataMask() => (bool success, string message);
+
+  // ⑥ Opens the Xenon component extension UI (chrome-extension://.../index.html)
+  // in a XenonWebDialog. Requires the extension to be loaded (default startup
+  // without --show-xenon-extension). Interact with the extension there; e.g.
+  // chrome.xenonPrivate.ping in the service worker (see background.js).
+  OpenComponentExtensionDialog() => (bool success, string message);
 };

@@ -52,6 +52,7 @@ import("//ui/gl/features.gni")
 import("//ui/views/features.gni")
 import("//ui/webui/webui_features.gni")
 import("//v8/gni/v8.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 assert(!is_ios, "Chromium/iOS shouldn't use anything in //chrome")
 assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
@@ -7763,6 +7764,10 @@ test("unit_tests") {
       "//chrome/browser/paint_preview:services",
       "//components/paint_preview/common:test_utils",
     ]
+  }
+
+  if (enable_xenon_service) {
+    deps += [ "//xenon_overlay/chrome/browser:unit_tests" ]
   }
 
   if (is_win || is_chromeos || is_mac) {

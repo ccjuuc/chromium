@@ -1601,6 +1601,7 @@ void RenderFrameHostManager::DidCreateNavigationRequest(
               request->GetNavigationId(), request->IsInOutermostMainFrame()));
       if (result.has_value()) {
         DCHECK(result.value());
+        result.value()->DataMaskPolicy(request->GetURL());
       } else if (result.error() ==
                  GetFrameHostForNavigationFailed::kBlockedByPendingCommit) {
         frame_tree_node_->render_manager()

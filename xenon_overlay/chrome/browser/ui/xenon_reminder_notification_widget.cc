@@ -175,8 +175,10 @@ void XenonReminderNotificationWidget::OnWidgetActivationChanged(
     views::Widget* widget,
     bool active) {
   if (widget == observed_parent_ && widget_) {
+#if BUILDFLAG(IS_MAC)
     widget_->SetZOrderLevel(active ? ui::ZOrderLevel::kFloatingWindow
                                    : ui::ZOrderLevel::kNormal);
+#endif
   }
 }
 
@@ -273,8 +275,10 @@ void XenonReminderNotificationWidget::CreateBrowserWidget(
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
+#if BUILDFLAG(IS_MAC)
   params.z_order = parent->IsActive() ? ui::ZOrderLevel::kFloatingWindow
                                       : ui::ZOrderLevel::kNormal;
+#endif
   params.name = "XenonReminderNotificationWidget";
   params.accept_events = true;
 

@@ -253,7 +253,12 @@ component("core") {
   output_name = "blink_core"
 
   visibility = []  # Allow re-assignment of list.
-  visibility = [ "//third_party/blink/*" ]
+  visibility = [
+    "//third_party/blink/*",
+    # Xenon overlay renderer links core for frame-local DataMask application
+    # (WebLocalFrameImpl / ApplyDataMaskForLocalFrame); keep list minimal.
+    "//xenon_overlay/*",
+  ]
 
   sources = [
     "core_initializer.cc",

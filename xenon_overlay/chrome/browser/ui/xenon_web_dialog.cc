@@ -3,6 +3,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "chrome/browser/profiles/profile.h"
+#include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
 #include "content/public/browser/browser_context.h"
 #include "url/gurl.h"
@@ -15,7 +16,19 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
 
+#include "third_party/blink/public/mojom/frame/data_mask.mojom.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/navigation_handle.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "services/service_manager/public/cpp/interface_provider.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+
 namespace xenon {
+
 
 // A custom WebDialogView that supports CSS drag regions (-webkit-app-region: drag).
 class XenonWebDialogView : public views::WebDialogView {
@@ -133,8 +146,38 @@ void XenonWebDialog::Show(content::BrowserContext* context,
 }
 
 // static
+GURL XenonWebDialog::GetXenonOverlayWebUIUrl() {
+  return GURL("chrome://xenon-overlay/");
+}
+
+// static
 void XenonWebDialog::ShowXenonOverlay(Profile* profile) {
-  Show(profile, GURL("chrome://xenon-overlay/"), 800, 600, u"Xenon Overlay");
+  Show(profile, GetXenonOverlayWebUIUrl(), 800, 600, u"Xenon Overlay");
+}
+
+// static
+void XenonWebDialog::ShowDataMaskTest(Profile* profile) {
+  // Global datamask policy is now injected natively via RenderFrameHostImpl::DataMaskPolicy.
+  // No additional Activator needed.
+  LOG(INFO) << "DataMask test enabled from XenonWebDialog (Rule injected natively).";
+}
+
+// static
+void XenonWebDialog::OpenComponentExtensionWindow(Profile* profile) {
+  if (!profile) {
+    LOG(WARNING) << "OpenComponentExtensionWindow: no profile";
+    return;
+  }
+  XenonExtensionManager* mgr = XenonExtensionManager::GetInstance();
+  if (!mgr) {
+    LOG(WARNING) << "OpenComponentExtensionWindow: XenonExtensionManager null";
+    return;
+  }
+  if (!mgr->ShowExtension(profile)) {
+    LOG(WARNING)
+        << "OpenComponentExtensionWindow: ShowExtension failed (extension "
+           "not loaded — avoid --show-xenon-extension on first run)";
+  }
 }
 
 XenonWebDialog::XenonWebDialog(const GURL& url,

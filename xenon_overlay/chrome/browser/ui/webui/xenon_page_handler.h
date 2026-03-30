@@ -29,6 +29,9 @@ class XenonPageHandler : public mojom::PageHandler {
   void PingAssociatedRemote(PingAssociatedRemoteCallback callback) override;
   void TestUtilityToBrowserObserver(
       TestUtilityToBrowserObserverCallback callback) override;
+  void TestDataMask(TestDataMaskCallback callback) override;
+  void OpenComponentExtensionDialog(
+      OpenComponentExtensionDialogCallback callback) override;
 
  private:
   mojo::Receiver<mojom::PageHandler> receiver_;

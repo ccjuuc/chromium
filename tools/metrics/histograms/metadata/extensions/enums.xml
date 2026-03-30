@@ -2871,6 +2871,7 @@ Called by update_extension_histograms.py.-->
       label="WEBSTOREPRIVATE_SHOULDSHOWENTERPRISEPROMOTIONBANNER"/>
   <int value="1955" label="WEBSTOREPRIVATE_LOGENTERPRISEPROMOSHOWN"/>
   <int value="1956" label="WEBSTOREPRIVATE_ONENTERPRISEPROMOCLICK"/>
+  <int value="1957" label="XENONPRIVATE_PING"/>
 </enum>
 
 <!-- LINT.ThenChange(//extensions/browser/extension_function_histogram_value.h:HistogramValue) -->
@@ -3260,6 +3261,7 @@ Called by update_extension_permission.py.-->
   <int value="261" label="kOmniboxDirectInput"/>
   <int value="262" label="kExperimentalActor"/>
   <int value="263" label="kEnterpriseLogin"/>
+  <int value="264" label="kXenonPrivate"/>
 </enum>
 
 <enum name="ExtensionPolicyReinstallReason">

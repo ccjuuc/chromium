@@ -1125,5 +1125,9 @@
   "wmDesksPrivate": {
     "dependencies": ["permission:wmDesksPrivate"],
     "contexts": ["privileged_extension"]
+  },
+  "xenonPrivate": {
+    "dependencies": ["permission:xenonPrivate"],
+    "contexts": ["privileged_extension"]
   }
 }

@@ -1,7 +1,13 @@
 import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("mojom") {
-  sources = [ "xenon_service.mojom" ]
+  sources = [
+    "xenon_page_api.mojom",
+    "xenon_service.mojom",
+  ]
+  public_deps = [
+    "//mojo/public/mojom/base",
+  ]
   deps = [
     "//services/network/public/mojom",
     "//sandbox/policy/mojom",

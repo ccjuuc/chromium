@@ -35,6 +35,18 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   // Remote / observer checks run from the WebUI page (split Mojo tests).
   static void ShowXenonOverlay(Profile* profile);
 
+  // Single source of truth for the WebUI URL shown by ShowXenonOverlay(). The WebUI
+  // page exercises `window.xenon` (XenonPageHost) in resources/webui/index.ts.
+  static GURL GetXenonOverlayWebUIUrl();
+
+  // test entry for Data Mask (网页打码).
+  static void ShowDataMaskTest(Profile* profile);
+
+  // Opens the Xenon component extension UI in a WebDialog (same path as
+  // XenonExtensionManager::ShowExtension). Use when extension is already
+  // loaded (normal startup loads it; `--show-xenon-extension` skips load).
+  static void OpenComponentExtensionWindow(Profile* profile);
+
  private:
   XenonWebDialog(const GURL& url,
                  int width,

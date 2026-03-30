@@ -371,6 +371,7 @@ void RenderFrameHostImpl::TearDownMojoConnection() {
   associated_registry_.reset();
 
   mojo_image_downloader_.reset();
+  data_mask_.reset();
   find_in_page_.reset();
   local_frame_.reset();
   local_main_frame_.reset();
