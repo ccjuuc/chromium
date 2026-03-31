@@ -8,6 +8,7 @@
 
 #include "base/logging.h"
 #include "content/public/browser/render_frame_host.h"
+#include "url/gurl.h"
 
 namespace xenon {
 
@@ -30,10 +31,20 @@ XenonDataMaskToMainHostImpl::~XenonDataMaskToMainHostImpl() = default;
 
 void XenonDataMaskToMainHostImpl::SendDataToMain(int32_t request_id,
                                                  const std::string& data) {
-  VLOG(1) << "Xenon DataMaskToMain request_id=" << request_id
-          << " bytes=" << data.size()
-          << " rfh_live="
-          << render_frame_host().IsRenderFrameLive();
+  content::RenderFrameHost& rfh = render_frame_host();
+  if (!rfh.IsRenderFrameLive()) {
+    return;
+  }
+
+  // 浏览器侧收口：可在此接入 DLP/审计/持久化。默认仅打可观测日志；勿在 INFO 打印整段
+  // `data`，避免泄露页面敏感内容。
+  const GURL& url = rfh.GetLastCommittedURL();
+  VLOG(1) << "Xenon DataMaskToMain"
+          << " request_id=" << request_id << " url=" << url.spec()
+          << " bytes=" << data.size();
+
+  // TODO(xenon): Route `data` to policy / XenonMainService / metrics when the
+  // pipeline is defined; keep synchronous work minimal (large payloads).
 }
 
 }  // namespace xenon

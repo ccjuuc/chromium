@@ -18,7 +18,15 @@ class RenderFrameHost;
 
 namespace xenon {
 
-// Browser receives `DataMaskToMain` from the renderer (e.g. `window.xenon`).
+// Browser-side implementation of `blink::mojom::DataMaskToMain`.
+//
+// Mojo 方向：Renderer 持有 `mojo::Remote<DataMaskToMain>`（见
+// `JSXenonApi::blink_data_mask_to_main_`、`GetBrowserInterfaceBroker().GetInterface`）；
+// Browser 侧用 `PendingReceiver` 构造本类，基类 `content::DocumentService` 内部持有
+// `mojo::Receiver<DataMaskToMain>` 并实现接口，因此 **这里不需要再持 Remote**。
+//
+// `SendDataToMain` 用于审计 / 策略回传等（与 LocalFrame 上打码规则正交）；payload 可能含
+// 敏感信息，请谨慎打日志。
 class XenonDataMaskToMainHostImpl
     : public content::DocumentService<blink::mojom::DataMaskToMain> {
  public:

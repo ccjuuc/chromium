@@ -324,6 +324,8 @@ sequenceDiagram
 
 工厂：`xenon_webui_controller_factory` 映射 URL。
 
+**与 `window.xenon` 勿混**：`chrome://xenon-overlay/` 上既有 **帧级** `XenonPageHost`（`PopulateChromeFrameBinders`），也有 **WebUI 专用** `PageHandler`（`PageHandler.getRemote()` + `WebUIBrowserInterfaceBrokerRegistry`）。**`chrome_browser_interface_binders` 中 `PopulateChromeWebUIFrameBinders` 与 `WebUIBrowserInterfaceBrokerRegistry` 是两条不同机制**（前者把接口打进**全局帧** `BinderMap` + `RegisterWebUIControllerInterfaceBinder` 过滤控制器类型；后者为每个 WebUI 类型建 **PerWebUIBroker**）。生成物 **`xenon.mojom-webui.js` 的 BUILD/GRD/AddResourcePath 链路**、逐步接入清单见 **`docs/xenon_page_api_browser_interface_broker.md` §10**。
+
 ---
 
 ## 6. 内置扩展（Component Extension）
