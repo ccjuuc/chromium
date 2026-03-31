@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/renderer/core/frame/data_mask_mutation_observer.h"
+#include "xenon_overlay/blink/renderer/core/frame/data_mask_mutation_observer.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_mutation_observer_init.h"
 #include "third_party/blink/renderer/core/dom/mutation_record.h"
-#include "third_party/blink/renderer/core/frame/data_mask_applier.h"
+#include "xenon_overlay/blink/renderer/core/frame/data_mask_applier.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 
 namespace blink {

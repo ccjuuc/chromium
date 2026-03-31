@@ -148,7 +148,6 @@
 #include "third_party/blink/public/mojom/filesystem/file_system.mojom-forward.h"
 #include "third_party/blink/public/mojom/font_access/font_access.mojom-forward.h"
 #include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom.h"
-#include "third_party/blink/public/mojom/frame/data_mask.mojom.h"
 #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-forward.h"
@@ -1701,11 +1700,6 @@ class CONTENT_EXPORT RenderFrameHostImpl
 
   // Returns the Mojo ImageDownloader service.
   const mojo::Remote<blink::mojom::ImageDownloader>& GetMojoImageDownloader();
-
-  // Returns remote to renderer-side `blink::mojom::DataMask` for this frame.
-  const mojo::Remote<blink::mojom::DataMask>& GetDataMask();
-
-  void DataMaskPolicy(const GURL& url);
 
   // Returns remote to renderer side FindInPage associated with this frame.
   const mojo::AssociatedRemote<blink::mojom::FindInPage>& GetFindInPage();
@@ -4876,8 +4870,6 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // Remotes must be reset in TearDownMojoConnection().
   // Holder of Mojo connection with ImageDownloader service in Blink.
   mojo::Remote<blink::mojom::ImageDownloader> mojo_image_downloader_;
-
-  mojo::Remote<blink::mojom::DataMask> data_mask_;
 
   // Holder of Mojo connection with FindInPage service in Blink.
   mojo::AssociatedRemote<blink::mojom::FindInPage> find_in_page_;

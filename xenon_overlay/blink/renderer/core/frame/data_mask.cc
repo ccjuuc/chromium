@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/renderer/core/frame/data_mask.h"
+#include "xenon_overlay/blink/renderer/core/frame/data_mask.h"
 
 #include "third_party/blink/public/platform/task_type.h"
-#include "third_party/blink/renderer/core/frame/data_mask_applier.h"
+#include "xenon_overlay/blink/renderer/core/frame/data_mask_applier.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"

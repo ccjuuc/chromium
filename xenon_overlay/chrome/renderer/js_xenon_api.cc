@@ -14,7 +14,7 @@
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/web/web_local_frame.h"
-#include "third_party/blink/renderer/core/frame/data_mask_applier.h"
+#include "xenon_overlay/blink/renderer/core/frame/data_mask_applier.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "v8/include/cppgc/allocation.h"
 #include "v8/include/cppgc/visitor.h"

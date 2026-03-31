@@ -303,6 +303,17 @@ component("core") {
                          "",
                          "fragment_directive")
   sources += rebase_path(blink_core_sources_frame, "", "frame")
+
+  # Xenon: DataMask renderer implementation (out-of-tree under //xenon_overlay).
+  sources += [
+    "//xenon_overlay/blink/renderer/core/frame/data_mask.cc",
+    "//xenon_overlay/blink/renderer/core/frame/data_mask.h",
+    "//xenon_overlay/blink/renderer/core/frame/data_mask_applier.cc",
+    "//xenon_overlay/blink/renderer/core/frame/data_mask_applier.h",
+    "//xenon_overlay/blink/renderer/core/frame/data_mask_mutation_observer.cc",
+    "//xenon_overlay/blink/renderer/core/frame/data_mask_mutation_observer.h",
+    "//xenon_overlay/blink/renderer/core/frame/local_frame_xenon_data_mask.cc",
+  ]
   sources += get_target_outputs(":make_deprecation_info")
   sources += rebase_path(blink_core_sources_fullscreen, "", "fullscreen")
   sources += rebase_path(blink_core_sources_geolocation, "", "geolocation")

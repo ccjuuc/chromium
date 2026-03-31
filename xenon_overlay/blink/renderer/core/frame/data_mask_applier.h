@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_APPLIER_H_
-#define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_APPLIER_H_
+#ifndef XENON_OVERLAY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_APPLIER_H_
+#define XENON_OVERLAY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_APPLIER_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
 
@@ -21,4 +21,4 @@ CORE_EXPORT void ResetDataMaskPresentationState(LocalFrame& frame);
 
 }  // namespace blink
 
-#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_APPLIER_H_
+#endif  // XENON_OVERLAY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_APPLIER_H_

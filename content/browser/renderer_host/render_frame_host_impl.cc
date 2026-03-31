@@ -315,6 +315,7 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
+#include "xenon_overlay/content/browser/render_frame_host_xenon_data_mask.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_service_binding_batch.h"
@@ -4522,7 +4523,7 @@ bool RenderFrameHostImpl::CreateRenderFrame(
 
   if (navigation_request) {
     const GURL& url = navigation_request->common_params().url;
-    DataMaskPolicy(url);
+    xenon::RenderFrameHostDataMaskApplyPolicy(this, url);
   }
 
   return true;
@@ -12431,7 +12432,7 @@ void RenderFrameHostImpl::CommitNavigation(
   DCHECK_EQ(this, navigation_request->GetRenderFrameHost());
   AssertBrowserContextShutdownHasntStarted();
 
-  DataMaskPolicy(common_params->url);
+  xenon::RenderFrameHostDataMaskApplyPolicy(this, common_params->url);
 
   bool is_same_document =
       NavigationTypeUtils::IsSameDocument(common_params->navigation_type);
@@ -13258,30 +13259,6 @@ RenderFrameHostImpl::GetMojoImageDownloader() {
         mojo_image_downloader_.BindNewPipeAndPassReceiver());
   }
   return mojo_image_downloader_;
-}
-
-const mojo::Remote<blink::mojom::DataMask>& RenderFrameHostImpl::GetDataMask() {
-  if (!data_mask_.is_bound() && GetRemoteInterfaces()) {
-    GetRemoteInterfaces()->GetInterface(
-        data_mask_.BindNewPipeAndPassReceiver());
-  }
-  return data_mask_;
-}
-
-void RenderFrameHostImpl::DataMaskPolicy(const GURL& url) {
-  // Test scenario for global DataMask Policy injection
-  blink::mojom::DataMaskRulesPtr rules = blink::mojom::DataMaskRules::New();
-  auto item = blink::mojom::MaskItem::New();
-  item->tag_id = 1;
-  item->policy_name = "GlobalTestMasking";
-  item->regs.push_back("百度");
-  item->mask_type = blink::mojom::MaskType::kReplace;
-  item->replace_text = "***XENON***";
-  item->is_content_mask = true;
-  rules->mask_items.push_back(std::move(item));
-
-  if (rules->mask_items.size() > 0)
-     GetDataMask()->SendData(2001, rules.Clone());
 }
 
 const mojo::AssociatedRemote<blink::mojom::FindInPage>&

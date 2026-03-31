@@ -112,7 +112,7 @@ flowchart LR
 
 ### 2.2 Blink：`DataMask` Mojo 实现
 
-文件：`third_party/blink/renderer/core/frame/data_mask.{h,cc}`
+文件：`xenon_overlay/blink/renderer/core/frame/data_mask.{h,cc}`（由 `//third_party/blink/renderer/core:core` 编入）
 
 - `GarbageCollected<DataMask>`，实现 `mojom::blink::DataMask`。
 - 构造时向 **`InterfaceRegistry`** 注册：  
@@ -133,7 +133,7 @@ data_mask_(MakeGarbageCollected<DataMask>(*this, interface_registry)),
 
 ### 2.3 Blink：DOM 应用（`data_mask_applier`）
 
-文件：`third_party/blink/renderer/core/frame/data_mask_applier.{h,cc}`
+文件：`xenon_overlay/blink/renderer/core/frame/data_mask_applier.{h,cc}`
 
 **入口**
 
@@ -163,7 +163,7 @@ data_mask_(MakeGarbageCollected<DataMask>(*this, interface_registry)),
 
 ### 2.4 Blink：`DataMaskSubtreeObserver`（DOM 变化后重打码）
 
-文件：`third_party/blink/renderer/core/frame/data_mask_mutation_observer.{h,cc}`
+文件：`xenon_overlay/blink/renderer/core/frame/data_mask_mutation_observer.{h,cc}`
 
 - 继承 **`MutationObserver::Delegate`**，在 **`LocalFrame::EnsureDataMaskSubtreeObserver`** 中挂在 **`Document::documentElement()`（即 `<html>`）** 上。
 - `MutationObserverInit`：**`childList`**、`subtree`、`characterData` 均为 **true**，因此 **子树节点增删** 与 **文本节点字符变化** 都会 **批量投递** 到 `Deliver`。
@@ -284,10 +284,10 @@ Xenon 的逻辑运行在 **渲染进程** 的 V8 上下文中，与 Blink 已同
 | 区域 | 路径 |
 |------|------|
 | Mojo | `third_party/blink/public/mojom/frame/data_mask.mojom` |
-| Blink 接口实现 | `third_party/blink/renderer/core/frame/data_mask.{h,cc}` |
+| Blink 接口实现 | `xenon_overlay/blink/renderer/core/frame/data_mask.{h,cc}` |
 | 规则存储 | `third_party/blink/renderer/core/frame/local_frame.{h,cc}` |
-| DOM 应用 | `third_party/blink/renderer/core/frame/data_mask_applier.{h,cc}` |
-| DOM 变更观察 | `third_party/blink/renderer/core/frame/data_mask_mutation_observer.{h,cc}` |
+| DOM 应用 | `xenon_overlay/blink/renderer/core/frame/data_mask_applier.{h,cc}` |
+| DOM 变更观察 | `xenon_overlay/blink/renderer/core/frame/data_mask_mutation_observer.{h,cc}` |
 | DOMContentLoaded 钩子 | `third_party/blink/renderer/core/frame/local_frame_client_impl.cc` |
 | 注册与生命周期 | `third_party/blink/renderer/core/frame/web_local_frame_impl.{h,cc}` |
 | Blink 构建 | `third_party/blink/renderer/core/frame/build.gni` |

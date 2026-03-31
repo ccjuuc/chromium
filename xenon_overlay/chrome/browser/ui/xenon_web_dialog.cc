@@ -157,7 +157,7 @@ void XenonWebDialog::ShowXenonOverlay(Profile* profile) {
 
 // static
 void XenonWebDialog::ShowDataMaskTest(Profile* profile) {
-  // Global datamask policy is now injected natively via RenderFrameHostImpl::DataMaskPolicy.
+  // Global datamask policy is injected via xenon::RenderFrameHostDataMaskApplyPolicy.
   // No additional Activator needed.
   LOG(INFO) << "DataMask test enabled from XenonWebDialog (Rule injected natively).";
 }

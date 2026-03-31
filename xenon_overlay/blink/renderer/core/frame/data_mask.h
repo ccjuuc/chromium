@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_H_
-#define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_H_
+#ifndef XENON_OVERLAY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_H_
+#define XENON_OVERLAY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_H_
 
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/blink/public/mojom/frame/data_mask.mojom-blink.h"
@@ -19,7 +19,7 @@ class WebLocalFrameImpl;
 
 // Renderer-side `blink::mojom::DataMask` implementation. The browser holds a
 // `mojo::Remote<blink::mojom::DataMask>` obtained via the frame's child
-// `InterfaceProvider` (see `RenderFrameHostImpl::GetDataMask()`).
+// `InterfaceProvider` (see xenon::RenderFrameHostDataMaskApplyPolicy).
 class CORE_EXPORT DataMask final : public GarbageCollected<DataMask>,
                                    public mojom::blink::DataMask {
  public:
@@ -47,4 +47,4 @@ class CORE_EXPORT DataMask final : public GarbageCollected<DataMask>,
 
 }  // namespace blink
 
-#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_H_
+#endif  // XENON_OVERLAY_BLINK_RENDERER_CORE_FRAME_DATA_MASK_H_

@@ -24,6 +24,7 @@
 #include "content/browser/renderer_host/render_frame_host_delegate.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "xenon_overlay/content/browser/render_frame_host_xenon_data_mask.h"
 #include "content/browser/shared_storage/shared_storage_document_service_impl.h"
 #include "content/common/dom_automation_controller.mojom.h"
 #include "content/common/frame.mojom.h"
@@ -371,7 +372,7 @@ void RenderFrameHostImpl::TearDownMojoConnection() {
   associated_registry_.reset();
 
   mojo_image_downloader_.reset();
-  data_mask_.reset();
+  xenon::RenderFrameHostDataMaskTearDown(this);
   find_in_page_.reset();
   local_frame_.reset();
   local_main_frame_.reset();

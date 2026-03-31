@@ -52,6 +52,7 @@
 #include "content/browser/renderer_host/render_frame_host_factory.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_frame_host_owner.h"
+#include "xenon_overlay/content/browser/render_frame_host_xenon_data_mask.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_enums.h"
@@ -1601,7 +1602,8 @@ void RenderFrameHostManager::DidCreateNavigationRequest(
               request->GetNavigationId(), request->IsInOutermostMainFrame()));
       if (result.has_value()) {
         DCHECK(result.value());
-        result.value()->DataMaskPolicy(request->GetURL());
+        xenon::RenderFrameHostDataMaskApplyPolicy(result.value(),
+                                                  request->GetURL());
       } else if (result.error() ==
                  GetFrameHostForNavigationFailed::kBlockedByPendingCommit) {
         frame_tree_node_->render_manager()
