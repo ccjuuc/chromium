@@ -22,7 +22,8 @@ class PickleIterator;
 
 namespace net {
 
-// ProxyServer encodes the {type, host, port} of a proxy server.
+// ProxyServer encodes the {type, host, port} (and optional outbound credential
+// for Leaf schemes) of a proxy server.
 // ProxyServer is immutable.
 class NET_EXPORT ProxyServer {
  public:
@@ -39,14 +40,35 @@ class NET_EXPORT ProxyServer {
     // A QUIC proxy is an HTTP proxy in which QUIC is used as the transport,
     // instead of TCP.
     SCHEME_QUIC = 1 << 6,
+    // Project V-style proxies handled by the Leaf outbound stack in net/socket.
+    // URI/PAC use vless/vmess/trojan; implementation is shared (LeafConnectJob).
+    SCHEME_VLESS = 1 << 7,
+    SCHEME_VMESS = 1 << 8,
+    SCHEME_TROJAN = 1 << 9,
   };
 
-  // Default copy-constructor and assignment operator are OK!
-
   // Constructs an invalid ProxyServer.
-  ProxyServer() = default;
+  ProxyServer();
 
-  ProxyServer(Scheme scheme, const HostPortPair& host_port_pair);
+  ProxyServer(const ProxyServer& other);
+  ProxyServer(ProxyServer&& other) noexcept;
+
+  ProxyServer& operator=(const ProxyServer& other);
+  ProxyServer& operator=(ProxyServer&& other) noexcept;
+
+  ~ProxyServer();
+
+  // |credential| holds percent-decoded URI userinfo bytes for Leaf outbounds
+  // (see net/base/proxy_string_util.cc, matching net::GetIdentityFromURL
+  // rules via UnescapeBinaryURLComponentSafe). Often UTF-8 text (Trojan
+  // password, VLESS UUID); empty for non-Leaf schemes or PAC-only entries.
+  // |leaf_uri_query| / |leaf_uri_fragment| preserve Xray-style vless://...?a=b#tag
+  // pieces (raw query without '?', fragment without '#').
+  ProxyServer(Scheme scheme,
+              const HostPortPair& host_port_pair,
+              std::string credential = {},
+              std::string leaf_uri_query = {},
+              std::string leaf_uri_fragment = {});
 
   // Creates a ProxyServer, validating and canonicalizing input. Port is
   // optional and, if not provided, will be replaced with the default port for
@@ -94,6 +116,14 @@ class NET_EXPORT ProxyServer {
     return scheme_ == SCHEME_SOCKS4 || scheme_ == SCHEME_SOCKS5;
   }
 
+  bool is_vless() const { return scheme_ == SCHEME_VLESS; }
+  bool is_vmess() const { return scheme_ == SCHEME_VMESS; }
+  bool is_trojan() const { return scheme_ == SCHEME_TROJAN; }
+  // True for proxy types implemented by LeafConnectJob / LeafClientSocket.
+  bool is_leaf_outbound() const {
+    return is_vless() || is_vmess() || is_trojan();
+  }
+
   // Returns true if this ProxyServer is a QUIC proxy.
   bool is_quic() const { return scheme_ == SCHEME_QUIC; }
 
@@ -107,6 +137,14 @@ class NET_EXPORT ProxyServer {
 
   const HostPortPair& host_port_pair() const;
 
+  // Non-empty when userinfo was present on a Leaf outbound URI (optional
+  // "user:password" before '@'). Always empty for non-Leaf schemes.
+  const std::string& credential() const { return credential_; }
+
+  // Xray-style sharing link extras (only Leaf schemes). Empty if absent.
+  const std::string& leaf_uri_query() const { return leaf_uri_query_; }
+  const std::string& leaf_uri_fragment() const { return leaf_uri_fragment_; }
+
   // Returns the default port number for a proxy server with the specified
   // scheme. Returns -1 if unknown.
   static int GetDefaultPortForScheme(Scheme scheme);
@@ -117,6 +155,9 @@ class NET_EXPORT ProxyServer {
  private:
   Scheme scheme_ = SCHEME_INVALID;
   HostPortPair host_port_pair_;
+  std::string credential_;
+  std::string leaf_uri_query_;
+  std::string leaf_uri_fragment_;
 };
 
 NET_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,

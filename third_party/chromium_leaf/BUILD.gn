@@ -1,0 +1,19 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/rust/rust_static_library.gni")
+
+# Rust shim for Leaf-related ABI versioning and future typed FFI (`cxx`; see
+# //docs/rust/ffi.md). Outbound handshakes (Trojan, etc.) live in //net C++.
+# Upstream Leaf remains under //third_party/leaf for reference / future gnrt.
+
+rust_static_library("chromium_leaf_ffi") {
+  allow_unsafe = true  # cxx bridge expands unsafe shims.
+  edition = "2024"
+  crate_root = "src/lib.rs"
+  sources = [ "src/lib.rs" ]
+  cxx_bindings = [ "src/lib.rs" ]
+
+  visibility = [ "//net:*" ]
+}

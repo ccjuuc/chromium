@@ -9,6 +9,7 @@
 
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
@@ -16,7 +17,9 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/types/optional_ref.h"
 #include "base/values.h"
+#include "build/buildflag.h"
 #include "net/base/features.h"
+#include "net/net_buildflags.h"
 #include "net/base/load_flags.h"
 #include "net/base/load_timing_internal_info.h"
 #include "net/base/net_errors.h"
@@ -92,7 +95,7 @@ void ConvertWsToHttp(url::SchemeHostPort& input) {
 }
 
 void HistogramProxyUsed(const ProxyInfo& proxy_info, bool success) {
-  const ProxyServer::Scheme max_scheme = ProxyServer::Scheme::SCHEME_QUIC;
+  const ProxyServer::Scheme max_scheme = ProxyServer::Scheme::SCHEME_TROJAN;
   ProxyServer::Scheme proxy_scheme = ProxyServer::Scheme::SCHEME_INVALID;
   if (!proxy_info.is_empty() && !proxy_info.is_direct()) {
     if (proxy_info.proxy_chain().is_multi_proxy()) {
@@ -841,6 +844,18 @@ int HttpStreamFactory::JobController::DoResolveProxyComplete(int rv) {
         return NetLogHttpStreamJobProxyChainResolved(
             proxy_info_.is_empty() ? ProxyChain() : proxy_info_.proxy_chain());
       });
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  {
+    const bool non_direct =
+        !proxy_info_.is_empty() && !proxy_info_.proxy_chain().is_direct();
+    if (non_direct) {
+      LOG(ERROR) << "[LEAF_PROXY_DEBUG] HttpStreamJobController proxy "
+                      "resolved url="
+                 << request_info_.url.spec() << " chain="
+                 << proxy_info_.proxy_chain().ToDebugString();
+    }
+  }
+#endif
 
   if (rv != OK) {
     return rv;
@@ -848,7 +863,10 @@ int HttpStreamFactory::JobController::DoResolveProxyComplete(int rv) {
   // Remove unsupported proxies from the list.
   int supported_proxies = ProxyServer::SCHEME_HTTP | ProxyServer::SCHEME_HTTPS |
                           ProxyServer::SCHEME_SOCKS4 |
-                          ProxyServer::SCHEME_SOCKS5;
+                          ProxyServer::SCHEME_SOCKS5 |
+                          ProxyServer::SCHEME_VLESS |
+                          ProxyServer::SCHEME_VMESS |
+                          ProxyServer::SCHEME_TROJAN;
   // WebSockets is not supported over QUIC.
   if (session_->IsQuicEnabled() && !is_websocket_) {
     supported_proxies |= ProxyServer::SCHEME_QUIC;

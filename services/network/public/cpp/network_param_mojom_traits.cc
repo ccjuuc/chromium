@@ -76,6 +76,12 @@ EnumTraits<network::mojom::ProxyScheme, net::ProxyServer::Scheme>::ToMojom(
       return network::mojom::ProxyScheme::kHttps;
     case ProxyServer::SCHEME_QUIC:
       return network::mojom::ProxyScheme::kQuic;
+    case ProxyServer::SCHEME_VLESS:
+      return network::mojom::ProxyScheme::kVless;
+    case ProxyServer::SCHEME_VMESS:
+      return network::mojom::ProxyScheme::kVmess;
+    case ProxyServer::SCHEME_TROJAN:
+      return network::mojom::ProxyScheme::kTrojan;
   }
   NOTREACHED();
 }
@@ -103,6 +109,15 @@ bool EnumTraits<network::mojom::ProxyScheme, net::ProxyServer::Scheme>::
     case network::mojom::ProxyScheme::kQuic:
       *out = ProxyServer::SCHEME_QUIC;
       return true;
+    case network::mojom::ProxyScheme::kVless:
+      *out = ProxyServer::SCHEME_VLESS;
+      return true;
+    case network::mojom::ProxyScheme::kVmess:
+      *out = ProxyServer::SCHEME_VMESS;
+      return true;
+    case network::mojom::ProxyScheme::kTrojan:
+      *out = ProxyServer::SCHEME_TROJAN;
+      return true;
   }
   return false;
 }
@@ -129,19 +144,35 @@ bool StructTraits<network::mojom::ProxyServerDataView, net::ProxyServer>::Read(
     return false;
   }
 
+  std::optional<std::string> credential;
+  if (!data.ReadCredential(&credential)) {
+    return false;
+  }
+
+  std::optional<std::string> leaf_uri_query;
+  if (!data.ReadLeafUriQuery(&leaf_uri_query)) {
+    return false;
+  }
+  std::optional<std::string> leaf_uri_fragment;
+  if (!data.ReadLeafUriFragment(&leaf_uri_fragment)) {
+    return false;
+  }
+
   if (scheme == net::ProxyServer::SCHEME_INVALID) {
     if (host_and_port) {
       return false;
     }
-    *out = net::ProxyServer(scheme, net::HostPortPair());
-    return true;
-  } else {
-    if (!host_and_port) {
-      return false;
-    }
-    *out = net::ProxyServer(scheme, std::move(*host_and_port));
+    *out = net::ProxyServer();
     return true;
   }
+  if (!host_and_port) {
+    return false;
+  }
+  *out = net::ProxyServer(scheme, std::move(*host_and_port),
+                           credential.value_or(std::string()),
+                           leaf_uri_query.value_or(std::string()),
+                           leaf_uri_fragment.value_or(std::string()));
+  return true;
 }
 
 bool StructTraits<network::mojom::ProxyChainDataView, net::ProxyChain>::Read(

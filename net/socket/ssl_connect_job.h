@@ -33,6 +33,7 @@ namespace net {
 
 class HostPortPair;
 class HttpProxySocketParams;
+class LeafSocketParams;
 class SocketTag;
 class SOCKSSocketParams;
 class TransportSocketParams;
@@ -40,10 +41,10 @@ class TransportSocketParams;
 class NET_EXPORT_PRIVATE SSLSocketParams
     : public base::RefCounted<SSLSocketParams> {
  public:
-  enum ConnectionType { DIRECT, SOCKS_PROXY, HTTP_PROXY };
+  enum ConnectionType { DIRECT, SOCKS_PROXY, HTTP_PROXY, LEAF_PROXY };
 
-  // Exactly one of |direct_params|, |socks_proxy_params|, and
-  // |http_proxy_params| must be non-NULL.
+  // Exactly one of |direct_params|, |socks_proxy_params|, |leaf_proxy_params|,
+  // and |http_proxy_params| must be represented in |nested_params|.
   SSLSocketParams(ConnectJobParams params,
                   const HostPortPair& host_and_port,
                   const SSLConfig& ssl_config,
@@ -65,6 +66,11 @@ class NET_EXPORT_PRIVATE SSLSocketParams
   const scoped_refptr<SOCKSSocketParams>& GetSocksProxyConnectionParams()
       const {
     return nested_params_.socks();
+  }
+
+  // Must be called only when GetConnectionType() returns LEAF_PROXY.
+  const scoped_refptr<LeafSocketParams>& GetLeafProxyConnectionParams() const {
+    return nested_params_.leaf();
   }
 
   // Must be called only when GetConnectionType() returns HTTP_PROXY.
@@ -147,6 +153,8 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
     STATE_TRANSPORT_CONNECT_COMPLETE,
     STATE_SOCKS_CONNECT,
     STATE_SOCKS_CONNECT_COMPLETE,
+    STATE_LEAF_HANDSHAKE,
+    STATE_LEAF_HANDSHAKE_COMPLETE,
     STATE_TUNNEL_CONNECT,
     STATE_TUNNEL_CONNECT_COMPLETE,
     STATE_SSL_CONNECT,
@@ -163,6 +171,8 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   int DoTransportConnectComplete(int result);
   int DoSOCKSConnect();
   int DoSOCKSConnectComplete(int result);
+  int DoLeafHandshake();
+  int DoLeafHandshakeComplete(int result);
   int DoTunnelConnect();
   int DoTunnelConnectComplete(int result);
   int DoSSLConnect();

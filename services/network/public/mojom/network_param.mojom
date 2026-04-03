@@ -52,6 +52,9 @@ enum ProxyScheme {
   kSocks5,
   kHttps,
   kQuic,
+  kVless,
+  kVmess,
+  kTrojan,
 };
 
 // Mirror of net::ProxyServer.
@@ -60,6 +63,15 @@ struct ProxyServer {
 
   // |host_and_port| field is set iff |scheme| is not INVALID or DIRECT.
   HostPortPair? host_and_port;
+
+  // Decoded Leaf outbound userinfo (same bytes as net::ProxyServer::credential,
+  // commonly UTF-8). Null or empty when not used.
+  string? credential;
+
+  // Xray-style vless/vmess/trojan sharing link: raw URI query (no '?') and
+  // fragment (no '#'). Null or empty when not used.
+  string? leaf_uri_query;
+  string? leaf_uri_fragment;
 };
 
 // Mirror of net::ProxyChain.

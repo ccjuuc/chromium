@@ -576,6 +576,9 @@ EVENT_TYPE(SOCKS_CONNECT)
 // The start/end of a SOCKS5 connect().
 EVENT_TYPE(SOCKS5_CONNECT)
 
+// The start/end of a Leaf-based proxy tunnel connect().
+EVENT_TYPE(LEAF_PROXY_CONNECT)
+
 // This event is emitted when the SOCKS connect fails because the provided
 // was longer than 255 characters.
 EVENT_TYPE(SOCKS_HOSTNAME_TOO_BIG)
@@ -887,6 +890,9 @@ EVENT_TYPE(SSL_CONNECT_JOB_CONNECT)
 
 // The start/end of the SOCKSConnectJob::Connect().
 EVENT_TYPE(SOCKS_CONNECT_JOB_CONNECT)
+
+// The start/end of the LeafConnectJob::Connect().
+EVENT_TYPE(LEAF_CONNECT_JOB_CONNECT)
 
 // The start/end of the HttpProxyConnectJob::Connect().
 EVENT_TYPE(HTTP_PROXY_CONNECT_JOB_CONNECT)

@@ -17,6 +17,7 @@
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/http_proxy_connect_job.h"
 #include "net/socket/connect_job.h"
+#include "net/socket/leaf_connect_job.h"
 #include "net/socket/socket_tag.h"
 #include "net/socket/socks_connect_job.h"
 #include "net/socket/ssl_connect_job.h"
@@ -70,6 +71,8 @@ class NET_EXPORT_PRIVATE ConnectJobFactory {
       std::unique_ptr<HttpProxyConnectJob::Factory>
           http_proxy_connect_job_factory = nullptr,
       std::unique_ptr<SOCKSConnectJob::Factory> socks_connect_job_factory =
+          nullptr,
+      std::unique_ptr<LeafConnectJob::Factory> leaf_connect_job_factory =
           nullptr,
       std::unique_ptr<SSLConnectJob::Factory> ssl_connect_job_factory = nullptr,
       std::unique_ptr<TransportConnectJob::Factory>
@@ -137,6 +140,7 @@ class NET_EXPORT_PRIVATE ConnectJobFactory {
 
   std::unique_ptr<HttpProxyConnectJob::Factory> http_proxy_connect_job_factory_;
   std::unique_ptr<SOCKSConnectJob::Factory> socks_connect_job_factory_;
+  std::unique_ptr<LeafConnectJob::Factory> leaf_connect_job_factory_;
   std::unique_ptr<SSLConnectJob::Factory> ssl_connect_job_factory_;
   std::unique_ptr<TransportConnectJob::Factory> transport_connect_job_factory_;
 

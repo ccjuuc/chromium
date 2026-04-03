@@ -475,6 +475,15 @@ base::Value::Dict CreateProxyServerDict(const net::ProxyChain& proxy_chain) {
     case net::ProxyServer::SCHEME_SOCKS5:
       scheme = "socks5";
       break;
+    case net::ProxyServer::SCHEME_VLESS:
+      scheme = "vless";
+      break;
+    case net::ProxyServer::SCHEME_VMESS:
+      scheme = "vmess";
+      break;
+    case net::ProxyServer::SCHEME_TROJAN:
+      scheme = "trojan";
+      break;
     case net::ProxyServer::SCHEME_INVALID:
       NOTREACHED();
   }

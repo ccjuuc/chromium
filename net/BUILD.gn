@@ -108,6 +108,8 @@ buildflag_header("buildflags") {
     "ENABLE_DEVICE_BOUND_SESSIONS=$enable_device_bound_sessions",
     "ENABLE_BRACKETED_PROXY_URIS=$enable_bracketed_proxy_uris",
     "ENABLE_QUIC_PROXY_SUPPORT=$enable_quic_proxy_support",
+    "ENABLE_CHROMIUM_LEAF=$enable_chromium_leaf",
+    "CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY=$chromium_leaf_builtin_default_proxy",
   ]
 }
 
@@ -1007,6 +1009,13 @@ component("net") {
     "socket/socks_client_socket.h",
     "socket/socks_connect_job.cc",
     "socket/socks_connect_job.h",
+    "socket/chromium_leaf_vless_handshake.cc",
+    "socket/chromium_leaf_vless_handshake.h",
+    "socket/leaf_client_socket.cc",
+    "socket/leaf_client_socket.h",
+    "socket/leaf_connect_job.cc",
+    "socket/leaf_connect_job.h",
+    "socket/leaf_outbound_protocol.h",
     "socket/ssl_client_socket.cc",
     "socket/ssl_client_socket.h",
     "socket/ssl_client_socket_impl.cc",
@@ -1176,6 +1185,13 @@ component("net") {
     "url_request/websocket_handshake_userdata_key.h",
   ]
 
+  if (enable_chromium_leaf) {
+    sources += [
+      "socket/chromium_leaf_glue.cc",
+      "socket/chromium_leaf_glue.h",
+    ]
+  }
+
   if (is_posix || is_fuchsia) {
     sources += [ "base/net_errors_posix.cc" ]
   }
@@ -1196,6 +1212,10 @@ component("net") {
     "//net/http:transport_security_state_generated_files",
     "//third_party/simdutf",
   ]
+
+  if (enable_chromium_leaf) {
+    deps += [ "//third_party/chromium_leaf:chromium_leaf_ffi" ]
+  }
 
   public_deps = [
     ":disk_cache_buildflags",

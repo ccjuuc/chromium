@@ -5,6 +5,8 @@
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_NETWORK_PARAM_MOJOM_TRAITS_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_NETWORK_PARAM_MOJOM_TRAITS_H_
 
+#include <string_view>
+
 #include "base/component_export.h"
 #include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
@@ -121,6 +123,32 @@ class COMPONENT_EXPORT(NETWORK_CPP_NETWORK_PARAM)
 
   static std::optional<net::HostPortPair> host_and_port(
       const net::ProxyServer& s);
+
+  static std::optional<std::string_view> credential(const net::ProxyServer& s) {
+    const std::string& c = s.credential();
+    if (c.empty()) {
+      return std::nullopt;
+    }
+    return c;
+  }
+
+  static std::optional<std::string_view> leaf_uri_query(
+      const net::ProxyServer& s) {
+    const std::string& q = s.leaf_uri_query();
+    if (q.empty()) {
+      return std::nullopt;
+    }
+    return q;
+  }
+
+  static std::optional<std::string_view> leaf_uri_fragment(
+      const net::ProxyServer& s) {
+    const std::string& f = s.leaf_uri_fragment();
+    if (f.empty()) {
+      return std::nullopt;
+    }
+    return f;
+  }
 
   static bool Read(network::mojom::ProxyServerDataView data,
                    net::ProxyServer* out);

@@ -285,6 +285,9 @@
 	path = third_party/junit/src
 	url = https://chromium.googlesource.com/external/junit
 	gclient-condition = checkout_android
+[submodule "third_party/leaf"]
+	path = third_party/leaf
+	url = https://github.com/eycorsican/leaf.git
 [submodule "third_party/leveldatabase/src"]
 	path = third_party/leveldatabase/src
 	url = https://chromium.googlesource.com/external/leveldb

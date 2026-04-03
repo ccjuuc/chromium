@@ -939,6 +939,19 @@ TEST(ProxyConfigTest, ProxyRulesSetBypassFlag) {
   EXPECT_FALSE(result.did_bypass_proxy());
 }
 
+// vless/vmess/trojan URIs use '=' in the query (e.g. type=ws). ParseFromString
+// must not treat those as "http=proxy" scheme splits.
+TEST(ProxyConfigTest, ParseFromString_LeafOutboundUriWithEqualsInQuery) {
+  ProxyConfig::ProxyRules rules;
+  rules.ParseFromString(
+      "vless://85ad7b82-738b-44f7-91ce-64a1ff53a314@example.com:30507?"
+      "encryption=none&security=none&type=ws&host=example.com&path=%2F30507");
+  EXPECT_EQ(ProxyConfig::ProxyRules::Type::PROXY_LIST, rules.type);
+  EXPECT_FALSE(rules.single_proxies.IsEmpty());
+  EXPECT_TRUE(rules.proxies_for_http.IsEmpty());
+  EXPECT_TRUE(rules.proxies_for_https.IsEmpty());
+}
+
 static const char kWsUrl[] = "ws://example.com/echo";
 static const char kWssUrl[] = "wss://example.com/echo";
 

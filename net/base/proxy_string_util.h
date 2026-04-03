@@ -8,9 +8,11 @@
 #include <string>
 #include <string_view>
 
+#include "build/buildflag.h"
 #include "net/base/net_export.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/proxy_server.h"
+#include "net/net_buildflags.h"
 
 namespace net {
 
@@ -126,6 +128,11 @@ ProxySchemeHostAndPortToProxyServer(ProxyServer::Scheme scheme,
 NET_EXPORT ProxyServer::Scheme GetSchemeFromUriScheme(
     std::string_view scheme,
     bool is_quic_allowed = false);
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+// Built-in default fixed proxy when |chromium_leaf_builtin_default_proxy| is true.
+NET_EXPORT extern const char kChromiumLeafDefaultProxyUri[];
+#endif
 
 }  // namespace net
 

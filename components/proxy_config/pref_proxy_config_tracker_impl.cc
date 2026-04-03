@@ -12,17 +12,18 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/values.h"
 #include "base/memory/ptr_util.h"
 #include "base/observer_list.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/values.h"
 #include "build/buildflag.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/proxy_config/proxy_config_dictionary.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "components/proxy_config/proxy_prefs_utils.h"
+#include "net/base/proxy_chain.h"
 #include "net/base/proxy_server.h"
 #include "net/base/proxy_string_util.h"
 #include "net/base/url_util.h"
@@ -386,6 +387,12 @@ void ProxyConfigServiceImpl::UpdateProxyConfig(
   // handle that case specially.
   net::ProxyConfigWithAnnotation new_config;
   ConfigAvailability availability = GetLatestProxyConfig(&new_config);
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  LOG(ERROR) << "[LEAF_PROXY_DEBUG] ProxyConfigServiceImpl::UpdateProxyConfig "
+             << "incoming_pref_state=" << static_cast<int>(config_state)
+             << " availability=" << static_cast<int>(availability)
+             << " effective_json=" << new_config.value().ToValue().DebugString();
+#endif
   if (availability != CONFIG_PENDING) {
     for (net::ProxyConfigService::Observer& observer : observers_) {
       observer.OnProxyConfigChanged(new_config, availability);
@@ -432,6 +439,12 @@ PrefProxyConfigTrackerImpl::PrefProxyConfigTrackerImpl(
       proxy_config_service_impl_(nullptr),
       proxy_config_service_task_runner_(proxy_config_service_task_runner) {
   pref_config_state_ = ReadPrefConfig(pref_service_, &pref_config_);
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  LOG(ERROR) << "[LEAF_PROXY_DEBUG] PrefProxyConfigTrackerImpl startup "
+               << "pref_config_state=" << static_cast<int>(pref_config_state_)
+               << " initial_effective_json="
+               << pref_config_.value().ToValue().DebugString();
+#endif
   active_config_state_ = pref_config_state_;
   active_config_ = pref_config_;
 
@@ -495,15 +508,44 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
 
   if (PrefPrecedes(pref_state)) {
     *effective_config = pref_config;
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+    LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch=PrefPrecedes "
+               << "pref_state=" << static_cast<int>(pref_state);
+#endif
     return net::ProxyConfigService::CONFIG_VALID;
   }
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+  // |CONFIG_FALLBACK| is the default registered fixed-servers profile (bundled
+  // VLESS) before the user changes proxy settings. It does not satisfy
+  // PrefPrecedes(), so without this branch the OS proxy would win whenever the
+  // system reports a valid config—most traffic would bypass Chromium prefs.
+  if (pref_state == ProxyPrefs::CONFIG_FALLBACK) {
+    *effective_config = pref_config;
+    LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
+                    "BuiltinLeafFallbackOverridesSystem "
+                 << "system_availability=" << static_cast<int>(system_availability);
+    return net::ProxyConfigService::CONFIG_VALID;
+  }
+#endif  // BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
 
   if (system_availability == net::ProxyConfigService::CONFIG_UNSET) {
     // If there's no system proxy config, fall back to prefs or default.
     if (pref_state == ProxyPrefs::CONFIG_FALLBACK && !ignore_fallback_config) {
       *effective_config = pref_config;
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+      LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
+                      "SystemUnset_UsePrefFallback "
+                   << "pref_state=" << static_cast<int>(pref_state);
+#endif
     } else {
       *effective_config = net::ProxyConfigWithAnnotation::CreateDirect();
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+      LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
+                      "SystemUnset_Direct pref_state="
+                   << static_cast<int>(pref_state)
+                   << " (prefs ignored unless CONFIG_FALLBACK)";
+#endif
     }
     return net::ProxyConfigService::CONFIG_VALID;
   }
@@ -511,12 +553,24 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
   *effective_config_state = ProxyPrefs::CONFIG_SYSTEM;
   if (pref_config.value().proxy_override_rules().empty()) {
     *effective_config = system_config;
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+    LOG(ERROR)
+        << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch=UseSystemProxy "
+        << "pref_state_was=" << static_cast<int>(pref_state)
+        << " — fixed_servers prefs are IGNORED when OS reports a system "
+           "proxy; PrefPrecedes must be true (policy/extension) or OS proxy "
+           "must be unset.";
+#endif
   } else {
     net::ProxyConfig new_config = system_config.value();
     new_config.set_proxy_override_rules(
         pref_config.value().proxy_override_rules());
     *effective_config = net::ProxyConfigWithAnnotation(
         new_config, system_config.traffic_annotation());
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+    LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
+                    "SystemPlusOverrideRules";
+#endif
   }
 
   return system_availability;
@@ -524,8 +578,19 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
 
 // static
 void PrefProxyConfigTrackerImpl::RegisterPrefs(PrefRegistrySimple* registry) {
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+  registry->RegisterDictionaryPref(
+      proxy_config::prefs::kProxy,
+      ProxyConfigDictionary::CreateFixedServers(
+          std::string(net::kChromiumLeafDefaultProxyUri),
+          "",
+          /*reverse_bypass=*/false));
+  LOG(ERROR) << "[LEAF_PROXY_DEBUG] RegisterPrefs: builtin default "
+                  "fixed_servers (all traffic, no bypass)";
+#else
   registry->RegisterDictionaryPref(proxy_config::prefs::kProxy,
                                    ProxyConfigDictionary::CreateSystem());
+#endif
   registry->RegisterListPref(proxy_config::prefs::kProxyOverrideRules);
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   registry->RegisterIntegerPref(
@@ -536,8 +601,19 @@ void PrefProxyConfigTrackerImpl::RegisterPrefs(PrefRegistrySimple* registry) {
 // static
 void PrefProxyConfigTrackerImpl::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+  registry->RegisterDictionaryPref(
+      proxy_config::prefs::kProxy,
+      ProxyConfigDictionary::CreateFixedServers(
+          std::string(net::kChromiumLeafDefaultProxyUri),
+          "",
+          /*reverse_bypass=*/false));
+  LOG(ERROR) << "[LEAF_PROXY_DEBUG] RegisterProfilePrefs: builtin default "
+                  "fixed_servers (all traffic, no bypass)";
+#else
   registry->RegisterDictionaryPref(proxy_config::prefs::kProxy,
                                    ProxyConfigDictionary::CreateSystem());
+#endif
   registry->RegisterBooleanPref(proxy_config::prefs::kUseSharedProxies, false);
   registry->RegisterListPref(proxy_config::prefs::kProxyOverrideRules);
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -559,6 +635,10 @@ ProxyPrefs::ConfigState PrefProxyConfigTrackerImpl::ReadPrefConfig(
   const base::Value::Dict& dict =
       pref_service->GetDict(proxy_config::prefs::kProxy);
   ProxyConfigDictionary proxy_dict(dict.Clone());
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  LOG(ERROR) << "[LEAF_PROXY_DEBUG] ReadPrefConfig raw prefs::kProxy dict="
+             << dict.DebugString();
+#endif
 
   ProxyPrefs::ConfigState state = ProxyPrefs::CONFIG_OTHER_PRECEDE;
   if (!PrefConfigToNetConfig(proxy_dict, config)) {
@@ -575,6 +655,12 @@ ProxyPrefs::ConfigState PrefProxyConfigTrackerImpl::ReadPrefConfig(
       state == ProxyPrefs::CONFIG_UNSET) {
     state = ProxyPrefs::CONFIG_POLICY_OVERRIDE;
   }
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  LOG(ERROR) << "[LEAF_PROXY_DEBUG] ReadPrefConfig result state="
+             << static_cast<int>(state) << " net_config_json="
+             << config->value().ToValue().DebugString();
+#endif
 
   return state;
 }
@@ -691,6 +777,45 @@ bool PrefProxyConfigTrackerImpl::PrefConfigToNetConfig(
       if (proxy_dict.GetBypassList(&proxy_bypass)) {
         proxy_config.proxy_rules().bypass_rules.ParseFromString(proxy_bypass);
       }
+      bool reverse_bypass = false;
+      if (proxy_dict.GetReverseBypass(&reverse_bypass)) {
+        proxy_config.proxy_rules().reverse_bypass = reverse_bypass;
+      }
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+      // Profiles may persist reverse_bypass + a tiny bypass list (e.g. only
+      // www.youtube.com), which sends googlevideo.com / ytimg.com / … direct and
+      // breaks media. For Leaf outbound fixed proxies, always full-tunnel.
+      if (proxy_config.proxy_rules().type ==
+          net::ProxyConfig::ProxyRules::Type::PROXY_LIST) {
+        bool any_leaf_outbound = false;
+        for (const net::ProxyChain& chain :
+             proxy_config.proxy_rules().single_proxies.AllChains()) {
+          for (size_t i = 0; i < chain.length(); ++i) {
+            if (chain.GetProxyServer(i).is_leaf_outbound()) {
+              any_leaf_outbound = true;
+              break;
+            }
+          }
+          if (any_leaf_outbound) {
+            break;
+          }
+        }
+        if (any_leaf_outbound) {
+          proxy_config.proxy_rules().bypass_rules.Clear();
+          proxy_config.proxy_rules().reverse_bypass = false;
+          LOG(ERROR) << "[LEAF_PROXY_DEBUG] PrefConfigToNetConfig: forcing "
+                         "full-tunnel (cleared bypass_list, reverse_bypass=0)";
+        }
+      }
+#endif  // ENABLE_CHROMIUM_LEAF && CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+      LOG(ERROR) << "[LEAF_PROXY_DEBUG] PrefConfigToNetConfig MODE_FIXED_SERVERS "
+                   << "server_len=" << proxy_server.size()
+                   << " bypass_list=\"" << proxy_bypass << "\""
+                   << " reverse_bypass=" << proxy_config.proxy_rules().reverse_bypass
+                   << " rules_type="
+                   << static_cast<int>(proxy_config.proxy_rules().type);
+#endif
       *config = net::ProxyConfigWithAnnotation(
           proxy_config, kSettingsProxyConfigTrafficAnnotation);
       return true;

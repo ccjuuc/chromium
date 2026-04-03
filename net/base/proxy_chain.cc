@@ -180,6 +180,12 @@ std::string ProxyChain::GetHistogramSuffix() const {
         return "HTTPS";
       case ProxyServer::SCHEME_QUIC:
         return "QUIC";
+      case ProxyServer::SCHEME_VLESS:
+        return "VLESS";
+      case ProxyServer::SCHEME_VMESS:
+        return "VMESS";
+      case ProxyServer::SCHEME_TROJAN:
+        return "TROJAN";
     }
   };
 

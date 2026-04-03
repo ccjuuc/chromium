@@ -29,4 +29,8 @@ int StreamSocket::ConfirmHandshake(CompletionOnceCallback callback) {
   return OK;
 }
 
+SocketDescriptor StreamSocket::PlatformSocketDescriptor() const {
+  return kInvalidSocket;
+}
+
 }  // namespace net

@@ -484,5 +484,27 @@ TEST(ProxySpecificationUtilTest,
   }
 }
 #endif  // BUILDFLAG(ENABLE_BRACKETED_PROXY_URIS)
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+TEST(ProxySpecificationUtilTest, VlessXraySharingLinkRoundTrip) {
+  const char kLink[] =
+      "vless://85ad7b82-738b-44f7-91ce-64a1ff53a314@example.com:30507"
+      "?encryption=none&security=none&type=ws&host=example.com&path=%2F30507"
+      "#tag";
+  ProxyServer p = ProxyUriToProxyServer(kLink, ProxyServer::SCHEME_HTTP,
+                                         /*is_quic_allowed=*/false);
+  ASSERT_TRUE(p.is_valid());
+  EXPECT_TRUE(p.is_vless());
+  EXPECT_EQ("example.com", p.host_port_pair().host());
+  EXPECT_EQ(30507, p.host_port_pair().port());
+  EXPECT_EQ("85ad7b82-738b-44f7-91ce-64a1ff53a314", p.credential());
+  EXPECT_EQ(
+      "encryption=none&security=none&type=ws&host=example.com&path=%2F30507",
+      p.leaf_uri_query());
+  EXPECT_EQ("tag", p.leaf_uri_fragment());
+  EXPECT_EQ(kLink, ProxyServerToProxyUri(p));
+}
+#endif  // BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+
 }  // namespace
 }  // namespace net

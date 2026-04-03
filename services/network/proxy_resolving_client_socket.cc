@@ -257,7 +257,9 @@ int ProxyResolvingClientSocket::DoProxyResolveComplete(int result) {
     // CancelReadIfReady().
     proxy_info_.RemoveProxiesWithoutScheme(
         net::ProxyServer::SCHEME_HTTP | net::ProxyServer::SCHEME_HTTPS |
-        net::ProxyServer::SCHEME_SOCKS4 | net::ProxyServer::SCHEME_SOCKS5);
+        net::ProxyServer::SCHEME_SOCKS4 | net::ProxyServer::SCHEME_SOCKS5 |
+        net::ProxyServer::SCHEME_VLESS | net::ProxyServer::SCHEME_VMESS |
+        net::ProxyServer::SCHEME_TROJAN);
 
     if (proxy_info_.is_empty()) {
       // No proxies/direct to choose from. This happens when we don't support

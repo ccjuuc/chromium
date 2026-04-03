@@ -5,6 +5,7 @@
 #include "net/socket/connect_job_params.h"
 
 #include "net/http/http_proxy_connect_job.h"
+#include "net/socket/leaf_connect_job.h"
 #include "net/socket/socks_connect_job.h"
 #include "net/socket/ssl_connect_job.h"
 #include "net/socket/transport_connect_job.h"
@@ -15,6 +16,8 @@ ConnectJobParams::ConnectJobParams() = default;
 ConnectJobParams::ConnectJobParams(scoped_refptr<HttpProxySocketParams> params)
     : params_(params) {}
 ConnectJobParams::ConnectJobParams(scoped_refptr<SOCKSSocketParams> params)
+    : params_(params) {}
+ConnectJobParams::ConnectJobParams(scoped_refptr<LeafSocketParams> params)
     : params_(params) {}
 ConnectJobParams::ConnectJobParams(scoped_refptr<TransportSocketParams> params)
     : params_(params) {}

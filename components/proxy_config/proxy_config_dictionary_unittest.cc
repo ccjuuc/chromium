@@ -67,6 +67,14 @@ TEST(ProxyConfigDictionaryTest, CreateFixedServers) {
   EXPECT_EQ("http://foo", h.bypass_list);
 }
 
+TEST(ProxyConfigDictionaryTest, CreateFixedServersReverseBypass) {
+  ProxyConfigDictionary dict(ProxyConfigDictionary::CreateFixedServers(
+      "http://1.2.3.4", "www.example.com", true));
+  bool reverse_bypass = false;
+  ASSERT_TRUE(dict.GetReverseBypass(&reverse_bypass));
+  EXPECT_TRUE(reverse_bypass);
+}
+
 TEST(ProxyConfigDictionaryTest, CreateSystem) {
   ProxyConfigDictionary dict(ProxyConfigDictionary::CreateSystem());
   ProxyConfigHolder h;

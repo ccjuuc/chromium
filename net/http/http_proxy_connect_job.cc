@@ -978,6 +978,9 @@ void HttpProxyConnectJob::EmitConnectLatency(NextProto http_version,
     case ProxyServer::SCHEME_INVALID:
     case ProxyServer::SCHEME_SOCKS4:
     case ProxyServer::SCHEME_SOCKS5:
+    case ProxyServer::SCHEME_VLESS:
+    case ProxyServer::SCHEME_VMESS:
+    case ProxyServer::SCHEME_TROJAN:
     default:
       NOTREACHED();
   }

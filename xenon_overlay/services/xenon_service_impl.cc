@@ -67,7 +67,8 @@ void XenonServiceImpl::Ping(PingCallback callback) {
   }
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
-  resource_request->url = GURL("https://www.baidu.com");
+  // Generic HTTPS probe; uses the same proxy resolution as all browser traffic.
+  resource_request->url = GURL("https://example.com/");
   resource_request->method = "GET";
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 
@@ -89,7 +90,7 @@ void XenonServiceImpl::Ping(PingCallback callback) {
               return;
             }
             if (response_body) {
-              const std::string message = "Baidu page download success. Size: " +
+              const std::string message = "Probe download success. Size: " +
                                           base::NumberToString(response_body->size());
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
               if (self->browser_observer_.is_connected()) {
@@ -105,7 +106,7 @@ void XenonServiceImpl::Ping(PingCallback callback) {
                     "Utility→Browser: Ping failed (no response body)");
               }
 #endif
-              std::move(user_callback).Run("Baidu page download failed.");
+              std::move(user_callback).Run("Probe download failed.");
             }
           },
           weak_factory_.GetWeakPtr(), std::move(loader), std::move(callback)),

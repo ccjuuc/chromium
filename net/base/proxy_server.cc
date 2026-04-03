@@ -34,6 +34,9 @@ bool IsValidSchemeInt(int scheme_int) {
     case ProxyServer::SCHEME_SOCKS5:
     case ProxyServer::SCHEME_HTTPS:
     case ProxyServer::SCHEME_QUIC:
+    case ProxyServer::SCHEME_VLESS:
+    case ProxyServer::SCHEME_VMESS:
+    case ProxyServer::SCHEME_TROJAN:
       return true;
     default:
       return false;
@@ -42,14 +45,40 @@ bool IsValidSchemeInt(int scheme_int) {
 
 }  // namespace
 
-ProxyServer::ProxyServer(Scheme scheme, const HostPortPair& host_port_pair)
-      : scheme_(scheme), host_port_pair_(host_port_pair) {
+ProxyServer::ProxyServer() = default;
+
+ProxyServer::ProxyServer(const ProxyServer& other) = default;
+ProxyServer::ProxyServer(ProxyServer&& other) noexcept = default;
+
+ProxyServer& ProxyServer::operator=(const ProxyServer& other) = default;
+ProxyServer& ProxyServer::operator=(ProxyServer&& other) noexcept = default;
+
+ProxyServer::~ProxyServer() = default;
+
+ProxyServer::ProxyServer(Scheme scheme,
+                         const HostPortPair& host_port_pair,
+                         std::string credential,
+                         std::string leaf_uri_query,
+                         std::string leaf_uri_fragment)
+    : scheme_(scheme),
+      host_port_pair_(host_port_pair),
+      credential_(std::move(credential)),
+      leaf_uri_query_(std::move(leaf_uri_query)),
+      leaf_uri_fragment_(std::move(leaf_uri_fragment)) {
   if (scheme_ == SCHEME_INVALID) {
     // |host_port_pair| isn't relevant for these special schemes, so none should
     // have been specified. It is important for this to be consistent since we
     // do raw field comparisons in the equality and comparison functions.
     DCHECK_EQ(host_port_pair, HostPortPair());
     host_port_pair_ = HostPortPair();
+    credential_.clear();
+    leaf_uri_query_.clear();
+    leaf_uri_fragment_.clear();
+  }
+  if (!is_leaf_outbound()) {
+    credential_.clear();
+    leaf_uri_query_.clear();
+    leaf_uri_fragment_.clear();
   }
 }
 
@@ -115,7 +144,8 @@ ProxyServer ProxyServer::FromSchemeHostAndPort(Scheme scheme,
   // A uint16_t port is always valid and canonicalized.
   uint16_t fixed_port = port.value_or(GetDefaultPortForScheme(scheme));
 
-  return ProxyServer(scheme, HostPortPair(unbracketed_host, fixed_port));
+  return ProxyServer(scheme, HostPortPair(unbracketed_host, fixed_port),
+                     std::string(), std::string(), std::string());
 }
 
 // static
@@ -132,12 +162,28 @@ ProxyServer ProxyServer::CreateFromPickle(base::PickleIterator* pickle_iter) {
     host_port_pair = HostPortPair::FromString(host_port_pair_string);
   }
 
-  return ProxyServer(scheme, host_port_pair);
+  std::string credential;
+  if (!pickle_iter->ReadString(&credential)) {
+    credential.clear();
+  }
+  std::string leaf_query;
+  if (!pickle_iter->ReadString(&leaf_query)) {
+    leaf_query.clear();
+  }
+  std::string leaf_fragment;
+  if (!pickle_iter->ReadString(&leaf_fragment)) {
+    leaf_fragment.clear();
+  }
+  return ProxyServer(scheme, host_port_pair, std::move(credential),
+                     std::move(leaf_query), std::move(leaf_fragment));
 }
 
 void ProxyServer::Persist(base::Pickle* pickle) const {
   pickle->WriteInt(static_cast<int>(scheme_));
   pickle->WriteString(host_port_pair_.ToString());
+  pickle->WriteString(credential_);
+  pickle->WriteString(leaf_uri_query_);
+  pickle->WriteString(leaf_uri_fragment_);
 }
 
 std::string ProxyServer::GetHost() const {
@@ -165,6 +211,9 @@ int ProxyServer::GetDefaultPortForScheme(Scheme scheme) {
       return 1080;
     case SCHEME_HTTPS:
     case SCHEME_QUIC:
+    case SCHEME_VLESS:
+    case SCHEME_VMESS:
+    case SCHEME_TROJAN:
       return 443;
     case SCHEME_INVALID:
       break;

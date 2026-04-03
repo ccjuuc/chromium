@@ -160,7 +160,8 @@ class ConnectJobFactoryTest : public TestWithTaskEnvironment {
 
     factory_ = std::make_unique<ConnectJobFactory>(
         std::move(http_proxy_job_factory), std::move(socks_job_factory),
-        std::move(ssl_job_factory), std::move(transport_job_factory));
+        /*leaf_connect_job_factory=*/nullptr, std::move(ssl_job_factory),
+        std::move(transport_job_factory));
   }
 
  protected:

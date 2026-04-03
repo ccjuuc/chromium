@@ -17,6 +17,7 @@
 #include "net/dns/public/resolve_error_info.h"
 #include "net/socket/next_proto.h"
 #include "net/socket/socket.h"
+#include "net/socket/socket_descriptor.h"
 
 namespace net {
 
@@ -148,6 +149,12 @@ class NET_EXPORT StreamSocket : public Socket {
   // the tag would inadvertently affect other streams; calling ApplySocketTag()
   // in this case will result in NOTREACHED().
   virtual void ApplySocketTag(const SocketTag& tag) = 0;
+
+  // If this socket is (or wraps only) a connected platform TCP stream whose
+  // handle is safe to use with synchronous send(), returns it; otherwise
+  // kInvalidSocket. Used by Leaf outbound bootstrap without RTTI (Chromium
+  // builds with /GR-).
+  virtual SocketDescriptor PlatformSocketDescriptor() const;
 };
 
 }  // namespace net

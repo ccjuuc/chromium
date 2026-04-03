@@ -21,6 +21,7 @@
 #include "net/http/http_proxy_connect_job.h"
 #include "net/socket/connect_job.h"
 #include "net/socket/connect_job_params_factory.h"
+#include "net/socket/leaf_connect_job.h"
 #include "net/socket/socket_tag.h"
 #include "net/socket/socks_connect_job.h"
 #include "net/socket/ssl_connect_job.h"
@@ -47,12 +48,15 @@ ConnectJobFactory::ConnectJobFactory(
     std::unique_ptr<HttpProxyConnectJob::Factory>
         http_proxy_connect_job_factory,
     std::unique_ptr<SOCKSConnectJob::Factory> socks_connect_job_factory,
+    std::unique_ptr<LeafConnectJob::Factory> leaf_connect_job_factory,
     std::unique_ptr<SSLConnectJob::Factory> ssl_connect_job_factory,
     std::unique_ptr<TransportConnectJob::Factory> transport_connect_job_factory)
     : http_proxy_connect_job_factory_(
           CreateFactoryIfNull(std::move(http_proxy_connect_job_factory))),
       socks_connect_job_factory_(
           CreateFactoryIfNull(std::move(socks_connect_job_factory))),
+      leaf_connect_job_factory_(
+          CreateFactoryIfNull(std::move(leaf_connect_job_factory))),
       ssl_connect_job_factory_(
           CreateFactoryIfNull(std::move(ssl_connect_job_factory))),
       transport_connect_job_factory_(
@@ -148,6 +152,12 @@ std::unique_ptr<ConnectJob> ConnectJobFactory::CreateConnectJob(
         request_priority, socket_tag, common_connect_job_params,
         connect_job_params.take_http_proxy(), delegate,
         /*net_log=*/nullptr);
+  }
+
+  if (connect_job_params.is_leaf_outbound()) {
+    return leaf_connect_job_factory_->Create(
+        request_priority, socket_tag, common_connect_job_params,
+        connect_job_params.take_leaf(), delegate, /*net_log=*/nullptr);
   }
 
   CHECK(connect_job_params.is_socks());

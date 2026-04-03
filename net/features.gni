@@ -69,6 +69,15 @@ declare_args() {
   # TODOs for this bug are correctly modified.
   enable_quic_proxy_support = is_debug
 
+  # Embeds //third_party/chromium_leaf (Rust FFI stub; full Leaf vendoring TBD).
+  # Requires Rust toolchain in the build (see //docs/rust.md).
+  enable_chromium_leaf = true
+
+  # When true (and enable_chromium_leaf), the default profile/local-state proxy
+  # pref is a fixed server using kChromiumLeafDefaultProxyUri (Xray-style vless).
+  # Set false for vanilla Chromium-like "system proxy" default.
+  chromium_leaf_builtin_default_proxy = true
+
   # The SQL disk cache backend is an experimental feature (crbug.com/422065015).
   # It is enabled only in specific build configurations to avoid increasing the
   # build size.

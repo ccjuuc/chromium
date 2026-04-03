@@ -41,6 +41,10 @@ class PROXY_CONFIG_EXPORT ProxyConfigDictionary {
   bool GetPacMandatory(bool* out) const;
   bool GetProxyServer(std::string* out) const;
   bool GetBypassList(std::string* out) const;
+  // When true, |bypass_list| hosts use the fixed proxy and all other hosts go
+  // direct (Android "proxy override" semantics). When false (default), the
+  // bypass list excludes hosts from the proxy.
+  bool GetReverseBypass(bool* out) const;
   bool HasBypassList() const;
 
   const base::Value::Dict& GetDictionary() const;
@@ -50,7 +54,8 @@ class PROXY_CONFIG_EXPORT ProxyConfigDictionary {
   static base::Value::Dict CreatePacScript(const std::string& pac_url,
                                            bool pac_mandatory);
   static base::Value::Dict CreateFixedServers(const std::string& proxy_server,
-                                              const std::string& bypass_list);
+                                              const std::string& bypass_list,
+                                              bool reverse_bypass = false);
   static base::Value::Dict CreateSystem();
 
   // Encodes the proxy server as "<url-scheme>=<proxy-scheme>://<proxy>".
@@ -66,7 +71,8 @@ class PROXY_CONFIG_EXPORT ProxyConfigDictionary {
                                             const std::string& pac_url,
                                             bool pac_mandatory,
                                             const std::string& proxy_server,
-                                            const std::string& bypass_list);
+                                            const std::string& bypass_list,
+                                            bool reverse_bypass = false);
 
   base::Value::Dict dict_;
 };

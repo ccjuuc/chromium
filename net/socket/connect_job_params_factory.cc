@@ -11,6 +11,7 @@
 #include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_util.h"
 #include "net/base/features.h"
@@ -19,10 +20,13 @@
 #include "net/base/privacy_mode.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/proxy_server.h"
+#include "net/base/proxy_string_util.h"
 #include "net/base/request_priority.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/net_buildflags.h"
 #include "net/http/http_proxy_connect_job.h"
 #include "net/socket/connect_job_params.h"
+#include "net/socket/leaf_connect_job.h"
 #include "net/socket/next_proto.h"
 #include "net/socket/socket_tag.h"
 #include "net/socket/socks_connect_job.h"
@@ -153,6 +157,20 @@ ConnectJobParams MakeSSLSocketParams(
       std::move(params), host_and_port, ssl_config, network_anonymization_key));
 }
 
+LeafOutboundProtocol LeafOutboundProtocolForProxyScheme(
+    ProxyServer::Scheme scheme) {
+  switch (scheme) {
+    case ProxyServer::SCHEME_VLESS:
+      return LeafOutboundProtocol::kVless;
+    case ProxyServer::SCHEME_VMESS:
+      return LeafOutboundProtocol::kVmess;
+    case ProxyServer::SCHEME_TROJAN:
+      return LeafOutboundProtocol::kTrojan;
+    default:
+      NOTREACHED();
+  }
+}
+
 // Recursively generate the params for a proxy at `host_port_pair` and the given
 // index in the proxy chain. This proceeds from the end of the proxy chain back
 // to the first proxy server.
@@ -259,8 +277,7 @@ ConnectJobParams CreateProxyParams(
         std::move(params), host_port_pair, proxy_chain, proxy_chain_index,
         should_tunnel, *proxy_annotation_tag, network_anonymization_key,
         secure_dns_policy));
-  } else {
-    DCHECK(proxy_server.is_socks());
+  } else if (proxy_server.is_socks()) {
     DCHECK_EQ(1u, proxy_chain.length());
     // TODO(crbug.com/40181080): Pass `endpoint` directly (preserving scheme
     // when available)?
@@ -268,6 +285,24 @@ ConnectJobParams CreateProxyParams(
         std::move(params), proxy_server.scheme() == ProxyServer::SCHEME_SOCKS5,
         ToHostPortPair(endpoint), network_anonymization_key,
         *proxy_annotation_tag));
+  } else {
+    DCHECK(proxy_server.is_leaf_outbound());
+    DCHECK_EQ(1u, proxy_chain.length());
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+    LOG(ERROR) << "[LEAF_PROXY_DEBUG] CreateProxyParams Leaf outbound "
+                 << "dest=" << ToHostPortPair(endpoint).ToString()
+                 << " proxy=" << ProxyServerToProxyUri(proxy_server)
+                 << " protocol="
+                 << static_cast<int>(proxy_server.scheme())
+                 << " chain=" << proxy_chain.ToDebugString();
+#endif
+    params = ConnectJobParams(base::MakeRefCounted<LeafSocketParams>(
+        std::move(params), ToHostPortPair(endpoint), network_anonymization_key,
+        *proxy_annotation_tag,
+        LeafOutboundProtocolForProxyScheme(proxy_server.scheme()),
+        proxy_server.credential(), proxy_server.leaf_uri_query(),
+        proxy_server.leaf_uri_fragment(),
+        proxy_server.host_port_pair().host()));
   }
 
   return params;

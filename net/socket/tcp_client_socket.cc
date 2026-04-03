@@ -457,6 +457,10 @@ SocketDescriptor TCPClientSocket::SocketDescriptorForTesting() const {
   return socket_->SocketDescriptorForTesting();
 }
 
+SocketDescriptor TCPClientSocket::PlatformSocketDescriptor() const {
+  return socket_->SocketDescriptorForTesting();
+}
+
 int64_t TCPClientSocket::GetTotalReceivedBytes() const {
   return total_received_bytes_;
 }

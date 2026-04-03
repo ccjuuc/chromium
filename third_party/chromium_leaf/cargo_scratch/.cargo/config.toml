@@ -1,0 +1,4 @@
+﻿# Cargo artifacts go under //out (gitignored), not next to //third_party sources.
+# This file: third_party/chromium_leaf/cargo_scratch/.cargo/
+[build]
+target-dir = "../../../../out/cargo_chromium_leaf_target"

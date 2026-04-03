@@ -6,10 +6,13 @@ third_party/*
 !third_party/catapult
 !third_party/dawn
 
-# No AI features or AI indexing is needed for out/ dir
-out/
+# No AI features or AI indexing is needed for out/ dir, except the debug log
+# below (gitignore-style: un-ignore each parent path segment).
+out/*
+!out/Debug_64/
+out/Debug_64/*
+!out/Debug_64/chrome_debug.log
 
 # Log files (e.g. mini_installer_ui.log)
 *.log
-**/chrome_debug.log
-
+!out/Debug_64/chrome_debug.log

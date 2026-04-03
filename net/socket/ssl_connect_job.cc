@@ -22,6 +22,7 @@
 #include "net/base/url_util.h"
 #include "net/cert/x509_util.h"
 #include "net/http/http_proxy_connect_job.h"
+#include "net/socket/leaf_connect_job.h"
 #include "net/log/net_log_source_type.h"
 #include "net/log/net_log_values.h"
 #include "net/log/net_log_with_source.h"
@@ -62,6 +63,9 @@ SSLSocketParams::~SSLSocketParams() = default;
 SSLSocketParams::ConnectionType SSLSocketParams::GetConnectionType() const {
   if (nested_params_.is_socks()) {
     return SOCKS_PROXY;
+  }
+  if (nested_params_.is_leaf_outbound()) {
+    return LEAF_PROXY;
   }
   if (nested_params_.is_http_proxy()) {
     return HTTP_PROXY;
@@ -112,10 +116,12 @@ LoadState SSLConnectJob::GetLoadState() const {
   switch (next_state_) {
     case STATE_TRANSPORT_CONNECT:
     case STATE_SOCKS_CONNECT:
+    case STATE_LEAF_HANDSHAKE:
     case STATE_TUNNEL_CONNECT:
       return LOAD_STATE_IDLE;
     case STATE_TRANSPORT_CONNECT_COMPLETE:
     case STATE_SOCKS_CONNECT_COMPLETE:
+    case STATE_LEAF_HANDSHAKE_COMPLETE:
       return nested_connect_job_->GetLoadState();
     case STATE_TUNNEL_CONNECT_COMPLETE:
       if (nested_socket_) {
@@ -221,6 +227,13 @@ int SSLConnectJob::DoLoop(int result) {
       case STATE_SOCKS_CONNECT_COMPLETE:
         rv = DoSOCKSConnectComplete(rv);
         break;
+      case STATE_LEAF_HANDSHAKE:
+        DCHECK_EQ(OK, rv);
+        rv = DoLeafHandshake();
+        break;
+      case STATE_LEAF_HANDSHAKE_COMPLETE:
+        rv = DoLeafHandshakeComplete(rv);
+        break;
       case STATE_TUNNEL_CONNECT:
         DCHECK_EQ(OK, rv);
         rv = DoTunnelConnect();
@@ -300,6 +313,28 @@ int SSLConnectJob::DoSOCKSConnect() {
 }
 
 int SSLConnectJob::DoSOCKSConnectComplete(int result) {
+  resolve_error_info_ = nested_connect_job_->GetResolveErrorInfo();
+  if (result == OK) {
+    next_state_ = STATE_SSL_CONNECT;
+    nested_socket_ = nested_connect_job_->PassSocket();
+  }
+
+  return result;
+}
+
+int SSLConnectJob::DoLeafHandshake() {
+  DCHECK(!nested_connect_job_);
+  DCHECK(params_->GetLeafProxyConnectionParams());
+  DCHECK(!TimerIsRunning());
+
+  next_state_ = STATE_LEAF_HANDSHAKE_COMPLETE;
+  nested_connect_job_ = std::make_unique<LeafConnectJob>(
+      priority(), socket_tag(), common_connect_job_params(),
+      params_->GetLeafProxyConnectionParams(), this, &net_log());
+  return nested_connect_job_->Connect();
+}
+
+int SSLConnectJob::DoLeafHandshakeComplete(int result) {
   resolve_error_info_ = nested_connect_job_->GetResolveErrorInfo();
   if (result == OK) {
     next_state_ = STATE_SSL_CONNECT;
@@ -523,6 +558,8 @@ SSLConnectJob::State SSLConnectJob::GetInitialState(
       return STATE_TUNNEL_CONNECT;
     case SSLSocketParams::SOCKS_PROXY:
       return STATE_SOCKS_CONNECT;
+    case SSLSocketParams::LEAF_PROXY:
+      return STATE_LEAF_HANDSHAKE;
   }
   NOTREACHED();
 }

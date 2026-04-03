@@ -130,6 +130,9 @@ class NET_EXPORT TCPClientSocket : public TransportClientSocket,
   // release ownership of the descriptor.
   SocketDescriptor SocketDescriptorForTesting() const;
 
+  // StreamSocket:
+  SocketDescriptor PlatformSocketDescriptor() const override;
+
   // base::PowerSuspendObserver methods:
   void OnSuspend() override;
 

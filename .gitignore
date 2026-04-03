@@ -326,6 +326,9 @@ vs-chromium-project.txt
 # ignore rust build files
 third_party/rust/target/
 
+# Obsolete path: use //third_party/chromium_leaf/cargo_scratch (target-dir under //out).
+/third_party/chromium_leaf_cargo_scratch/
+
 # b/328065301: This file is temporarily used as a migration toggle between
 # GCS hooks and first class deps.
 **/*_is_first_class_gcs

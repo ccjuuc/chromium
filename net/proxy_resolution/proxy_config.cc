@@ -49,6 +49,23 @@ void AddProxyURIListToProxyList(std::string_view uri_list,
   }
 }
 
+// Leaf outbound URIs (vless/vmess/trojan) almost always contain '=' in the query
+// (e.g. type=ws&encryption=none). ParseFromString() splits on '=' to implement
+// "http=proxy;https=proxy", so a single vless://... line would be mis-parsed as
+// PROXY_LIST_PER_SCHEME with empty lists — everything resolves to DIRECT.
+bool IsLeafOutboundProxyUriToken(std::string_view segment) {
+  segment = base::TrimWhitespaceASCII(segment, base::TRIM_ALL);
+  if (segment.empty()) {
+    return false;
+  }
+  return base::StartsWith(segment, "vless://",
+                          base::CompareCase::INSENSITIVE_ASCII) ||
+         base::StartsWith(segment, "vmess://",
+                          base::CompareCase::INSENSITIVE_ASCII) ||
+         base::StartsWith(segment, "trojan://",
+                          base::CompareCase::INSENSITIVE_ASCII);
+}
+
 }  // namespace
 
 ProxyConfig::ProxyRules::ProxyRules() = default;
@@ -112,6 +129,23 @@ void ProxyConfig::ProxyRules::ParseFromString(std::string_view proxy_rules,
 
   base::StringViewTokenizer proxy_server_list(proxy_rules, ";");
   while (proxy_server_list.GetNext()) {
+    std::string_view trimmed_segment = base::TrimWhitespaceASCII(
+        proxy_server_list.token(), base::TRIM_ALL);
+    if (trimmed_segment.empty()) {
+      continue;
+    }
+    if (IsLeafOutboundProxyUriToken(trimmed_segment)) {
+      if (type == Type::PROXY_LIST_PER_SCHEME) {
+        // Incompatible with a prior per-scheme segment; skip.
+        continue;
+      }
+      AddProxyURIListToProxyList(trimmed_segment, &single_proxies,
+                                 ProxyServer::SCHEME_HTTP,
+                                 allow_bracketed_proxy_chains, is_quic_allowed);
+      type = Type::PROXY_LIST;
+      continue;
+    }
+
     // Have to use the constructor that takes iterators here (or copy the
     // current token() on the stack), since StringViewTokenizer's constructor
     // that takes a string_view doesn't make its own copy of the string_view,

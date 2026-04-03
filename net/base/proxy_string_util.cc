@@ -10,6 +10,7 @@
 
 #include "base/check.h"
 #include "base/notreached.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -20,6 +21,8 @@
 #include "net/http/http_util.h"
 #include "net/net_buildflags.h"
 #include "url/third_party/mozilla/url_parse.h"
+#include "url/url_canon_stdstring.h"
+#include "url/url_util.h"
 
 namespace net {
 
@@ -47,6 +50,15 @@ ProxyServer::Scheme GetSchemeFromPacTypeInternal(std::string_view type) {
   if (base::EqualsCaseInsensitiveASCII(type, "https")) {
     return ProxyServer::SCHEME_HTTPS;
   }
+  if (base::EqualsCaseInsensitiveASCII(type, "vless")) {
+    return ProxyServer::SCHEME_VLESS;
+  }
+  if (base::EqualsCaseInsensitiveASCII(type, "vmess")) {
+    return ProxyServer::SCHEME_VMESS;
+  }
+  if (base::EqualsCaseInsensitiveASCII(type, "trojan")) {
+    return ProxyServer::SCHEME_TROJAN;
+  }
 
   return ProxyServer::SCHEME_INVALID;
 }
@@ -57,6 +69,92 @@ std::string ConstructHostPortString(std::string_view hostname, uint16_t port) {
          hostname.find(":") == std::string_view::npos);
 
   return base::StrCat({hostname, ":", base::NumberToString(port)});
+}
+
+// Decodes one userinfo subcomponent (username or password) the same way as
+// net::GetIdentityFromURL()'s UnescapeIdentityString helper: use
+// UnescapeBinaryURLComponentSafe so control bytes stay escaped, and do not
+// apply query-style '+' decoding (see net/base/url_util.cc).
+std::string UnescapeLeafUserinfoPiece(std::string_view escaped_piece) {
+  std::string unescaped;
+  if (base::UnescapeBinaryURLComponentSafe(escaped_piece,
+                                           /*fail_on_path_separators=*/false,
+                                           &unescaped)) {
+    return unescaped;
+  }
+  return std::string(escaped_piece);
+}
+
+std::string LeafCredentialFromAuthority(
+    std::string_view authority,
+    const url::Component& username_component,
+    const url::Component& password_component) {
+  std::string cred;
+  if (username_component.is_valid()) {
+    cred = UnescapeLeafUserinfoPiece(authority.substr(
+        username_component.begin, username_component.len));
+  }
+  if (password_component.is_valid()) {
+    if (!cred.empty()) {
+      cred.push_back(':');
+    }
+    cred += UnescapeLeafUserinfoPiece(authority.substr(
+        password_component.begin, password_component.len));
+  }
+  return cred;
+}
+
+// Serializes userinfo with url::EncodeURIComponent, consistent with encoding
+// used elsewhere when building URL components (see url/url_util.h).
+std::string LeafProxyUri(const ProxyServer& proxy_server,
+                         std::string_view scheme_with_colon_slashslash) {
+  const std::string hostport =
+      ConstructHostPortString(proxy_server.GetHost(), proxy_server.GetPort());
+  const std::string& cred = proxy_server.credential();
+  std::string base_uri;
+  if (cred.empty()) {
+    base_uri = std::string(scheme_with_colon_slashslash) + hostport;
+  } else {
+    std::string encoded;
+    url::StdStringCanonOutput o(&encoded);
+    url::EncodeURIComponent(cred, &o);
+    o.Complete();
+    base_uri =
+        base::StrCat({scheme_with_colon_slashslash, encoded, "@", hostport});
+  }
+  const std::string& q = proxy_server.leaf_uri_query();
+  const std::string& f = proxy_server.leaf_uri_fragment();
+  if (!q.empty()) {
+    base_uri.push_back('?');
+    base_uri += q;
+  }
+  if (!f.empty()) {
+    base_uri.push_back('#');
+    base_uri += f;
+  }
+  return base_uri;
+}
+
+// Strips `#fragment` then `?query` from the leaf authority string (content
+// after scheme://). Per URL ordering, fragment is removed first.
+void LeafStripUriQueryAndFragment(std::string_view* authority_in_out,
+                                  std::string* leaf_query,
+                                  std::string* leaf_fragment) {
+  std::string_view s = *authority_in_out;
+  leaf_query->clear();
+  leaf_fragment->clear();
+
+  const size_t hash = s.find('#');
+  if (hash != std::string_view::npos) {
+    *leaf_fragment = std::string(s.substr(hash + 1));
+    s = s.substr(0, hash);
+  }
+  const size_t qmark = s.find('?');
+  if (qmark != std::string_view::npos) {
+    *leaf_query = std::string(s.substr(qmark + 1));
+    s = s.substr(0, qmark);
+  }
+  *authority_in_out = s;
 }
 
 std::tuple<std::string_view, std::string_view>
@@ -127,6 +225,18 @@ std::string ProxyServerToPacResultElement(const ProxyServer& proxy_server) {
       return std::string("QUIC ") +
              ConstructHostPortString(proxy_server.GetHost(),
                                      proxy_server.GetPort());
+    case ProxyServer::SCHEME_VLESS:
+      return std::string("VLESS ") +
+             ConstructHostPortString(proxy_server.GetHost(),
+                                     proxy_server.GetPort());
+    case ProxyServer::SCHEME_VMESS:
+      return std::string("VMESS ") +
+             ConstructHostPortString(proxy_server.GetHost(),
+                                     proxy_server.GetPort());
+    case ProxyServer::SCHEME_TROJAN:
+      return std::string("TROJAN ") +
+             ConstructHostPortString(proxy_server.GetHost(),
+                                     proxy_server.GetPort());
     default:
       // Got called with an invalid scheme.
       NOTREACHED();
@@ -193,6 +303,12 @@ std::string ProxyServerToProxyUri(const ProxyServer& proxy_server) {
       return std::string("quic://") +
              ConstructHostPortString(proxy_server.GetHost(),
                                      proxy_server.GetPort());
+    case ProxyServer::SCHEME_VLESS:
+      return LeafProxyUri(proxy_server, "vless://");
+    case ProxyServer::SCHEME_VMESS:
+      return LeafProxyUri(proxy_server, "vmess://");
+    case ProxyServer::SCHEME_TROJAN:
+      return LeafProxyUri(proxy_server, "trojan://");
     default:
       // Got called with an invalid scheme.
       NOTREACHED();
@@ -209,21 +325,57 @@ ProxyServer ProxySchemeHostAndPortToProxyServer(
     return ProxyServer();
   }
 
+  std::string_view authority = host_and_port;
+  std::string leaf_query;
+  std::string leaf_fragment;
+  const bool is_leaf_outbound =
+      scheme == ProxyServer::SCHEME_VLESS ||
+      scheme == ProxyServer::SCHEME_VMESS ||
+      scheme == ProxyServer::SCHEME_TROJAN;
+  if (is_leaf_outbound) {
+    LeafStripUriQueryAndFragment(&authority, &leaf_query, &leaf_fragment);
+  }
+
   url::Component username_component;
   url::Component password_component;
   url::Component hostname_component;
   url::Component port_component;
-  url::ParseAuthority(host_and_port, url::Component(0, host_and_port.size()),
+  url::ParseAuthority(authority, url::Component(0, authority.size()),
                       url::ParserMode::kSpecialURL, &username_component,
                       &password_component, &hostname_component,
                       &port_component);
+
+  if (is_leaf_outbound) {
+    if (hostname_component.is_empty()) {
+      return ProxyServer();
+    }
+    std::string_view hostname =
+        authority.substr(hostname_component.begin, hostname_component.len);
+    if (port_component.is_valid() && port_component.is_empty()) {
+      return ProxyServer();
+    }
+    std::string_view port =
+        port_component.is_nonempty()
+            ? authority.substr(port_component.begin, port_component.len)
+            : "";
+    std::string cred = LeafCredentialFromAuthority(
+        authority, username_component, password_component);
+    ProxyServer base =
+        ProxyServer::FromSchemeHostAndPort(scheme, hostname, port);
+    if (!base.is_valid()) {
+      return ProxyServer();
+    }
+    return ProxyServer(scheme, base.host_port_pair(), std::move(cred),
+                       std::move(leaf_query), std::move(leaf_fragment));
+  }
+
   if (username_component.is_valid() || password_component.is_valid() ||
       hostname_component.is_empty()) {
     return ProxyServer();
   }
 
   std::string_view hostname =
-      host_and_port.substr(hostname_component.begin, hostname_component.len);
+      authority.substr(hostname_component.begin, hostname_component.len);
 
   // Reject inputs like "foo:". /url parsing and canonicalization code generally
   // allows it and treats it the same as a URL without a specified port, but
@@ -233,7 +385,7 @@ ProxyServer ProxySchemeHostAndPortToProxyServer(
   }
   std::string_view port =
       port_component.is_nonempty()
-          ? host_and_port.substr(port_component.begin, port_component.len)
+          ? authority.substr(port_component.begin, port_component.len)
           : "";
 
   return ProxyServer::FromSchemeHostAndPort(scheme, hostname, port);
@@ -261,6 +413,15 @@ ProxyServer::Scheme GetSchemeFromUriScheme(std::string_view scheme,
     return ProxyServer::SCHEME_QUIC;
   }
 #endif  // BUILDFLAG(ENABLE_QUIC_PROXY_SUPPORT)
+  if (base::EqualsCaseInsensitiveASCII(scheme, "vless")) {
+    return ProxyServer::SCHEME_VLESS;
+  }
+  if (base::EqualsCaseInsensitiveASCII(scheme, "vmess")) {
+    return ProxyServer::SCHEME_VMESS;
+  }
+  if (base::EqualsCaseInsensitiveASCII(scheme, "trojan")) {
+    return ProxyServer::SCHEME_TROJAN;
+  }
   return ProxyServer::SCHEME_INVALID;
 }
 
@@ -309,4 +470,12 @@ ProxyChain MultiProxyUrisToProxyChain(std::string_view uris,
   NOTREACHED();
 #endif  // !BUILDFLAG(ENABLE_BRACKETED_PROXY_URIS)
 }
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+const char kChromiumLeafDefaultProxyUri[] =
+    "vless://85ad7b82-738b-44f7-91ce-64a1ff53a314@www.ettreasure.com:30507"
+    "?encryption=none&security=none&type=ws&host=www.ettreasure.com&path=%2F30507"
+    "#kxinarvy";
+#endif
+
 }  // namespace net

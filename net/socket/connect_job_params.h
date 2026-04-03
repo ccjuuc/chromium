@@ -13,6 +13,7 @@
 namespace net {
 
 class HttpProxySocketParams;
+class LeafSocketParams;
 class SOCKSSocketParams;
 class TransportSocketParams;
 class SSLSocketParams;
@@ -23,6 +24,7 @@ class NET_EXPORT_PRIVATE ConnectJobParams {
   ConnectJobParams();
   explicit ConnectJobParams(scoped_refptr<HttpProxySocketParams> params);
   explicit ConnectJobParams(scoped_refptr<SOCKSSocketParams> params);
+  explicit ConnectJobParams(scoped_refptr<LeafSocketParams> params);
   explicit ConnectJobParams(scoped_refptr<TransportSocketParams> params);
   explicit ConnectJobParams(scoped_refptr<SSLSocketParams> params);
   ~ConnectJobParams();
@@ -41,6 +43,10 @@ class NET_EXPORT_PRIVATE ConnectJobParams {
     return std::holds_alternative<scoped_refptr<SOCKSSocketParams>>(params_);
   }
 
+  bool is_leaf_outbound() const {
+    return std::holds_alternative<scoped_refptr<LeafSocketParams>>(params_);
+  }
+
   bool is_transport() const {
     return std::holds_alternative<scoped_refptr<TransportSocketParams>>(
         params_);
@@ -57,6 +63,9 @@ class NET_EXPORT_PRIVATE ConnectJobParams {
   const scoped_refptr<SOCKSSocketParams>& socks() const {
     return get<scoped_refptr<SOCKSSocketParams>>(params_);
   }
+  const scoped_refptr<LeafSocketParams>& leaf() const {
+    return get<scoped_refptr<LeafSocketParams>>(params_);
+  }
   const scoped_refptr<TransportSocketParams>& transport() const {
     return get<scoped_refptr<TransportSocketParams>>(params_);
   }
@@ -71,6 +80,9 @@ class NET_EXPORT_PRIVATE ConnectJobParams {
   scoped_refptr<SOCKSSocketParams>&& take_socks() {
     return get<scoped_refptr<SOCKSSocketParams>>(std::move(params_));
   }
+  scoped_refptr<LeafSocketParams>&& take_leaf() {
+    return get<scoped_refptr<LeafSocketParams>>(std::move(params_));
+  }
   scoped_refptr<TransportSocketParams>&& take_transport() {
     return get<scoped_refptr<TransportSocketParams>>(std::move(params_));
   }
@@ -81,6 +93,7 @@ class NET_EXPORT_PRIVATE ConnectJobParams {
  private:
   std::variant<scoped_refptr<HttpProxySocketParams>,
                scoped_refptr<SOCKSSocketParams>,
+               scoped_refptr<LeafSocketParams>,
                scoped_refptr<TransportSocketParams>,
                scoped_refptr<SSLSocketParams>>
       params_;

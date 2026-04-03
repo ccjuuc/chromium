@@ -1,0 +1,12 @@
+﻿[package]
+name = "chromium_leaf_cargo_test"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib_cargo_test.rs"
+
+[dependencies]
+leaf = { path = "../../leaf/leaf", default-features = false, features = ["outbound-vless", "outbound-vmess", "outbound-trojan", "outbound-ws", "outbound-tls", "rustls-tls-aws-lc", "aws-lc-aead"] }
+tokio = { version = "1", features = ["rt", "net", "io-util", "macros"] }
+uuid = { version = "1", features = ["v4"] }
