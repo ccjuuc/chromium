@@ -79,16 +79,11 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
     kNone = 0,
     kTcpWriteVless,
     kTcpWriteVlessComplete,
-    kTcpReadPrefix,
-    kTcpReadPrefixComplete,
-    kTcpReadAddonComplete,
     kWsWriteHttp,
     kWsWriteHttpComplete,
     kWsReadHeaders,
     kWsReadHeadersComplete,
     kWsWriteFrameComplete,
-    kWsReadFirstFrame,
-    kWsReadFirstFrameComplete,
   };
 
   int ReadWithoutFraming(IOBuffer* buf,
@@ -99,10 +94,14 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
                         CompletionOnceCallback callback);
   void OnWsTransportRead(int result);
   void OnWsTransportWrite(int result);
-  void OnTcpStripVlessResponseComplete(scoped_refptr<IOBuffer> user_buf,
-                                       int user_buf_len,
-                                       int result);
+  void OnTcpVlessStripReadComplete(scoped_refptr<IOBuffer> user_buf,
+                                   int user_buf_len,
+                                   int result);
   void OnTcpStripFinalReadComplete(int result);
+  void CompleteTcpVlessStripAndIssueUserRead(scoped_refptr<IOBuffer> user_buf,
+                                             int user_buf_len);
+  void IssueTcpVlessAddonRead(scoped_refptr<IOBuffer> user_buf,
+                              int user_buf_len);
 
   void OnHandshakeIOComplete(int result);
   int DoHandshakeLoop(int result);
@@ -137,6 +136,10 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
   std::string handshake_ws_http_str_;
   std::array<uint8_t, 2> handshake_tcp_prefix_{};
   int handshake_tcp_prefix_read_ = 0;
+  // -1 = have not yet applied addon length from the 2-byte VLESS response
+  // header; 0 = no addon bytes left to discard; >0 = bytes of addon still to
+  // read and discard (after prefix is complete).
+  int vless_tcp_addon_remaining_ = -1;
 
   bool ws_framing_ = false;
   bool need_strip_vless_response_ = false;
@@ -150,10 +153,11 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
   static constexpr int kHandshakeHeaderReadChunk = 4096;
   raw_ptr<char> ws_user_read_dst_ = nullptr;
   int ws_user_read_len_ = 0;
-  CompletionOnceCallback ws_user_read_callback_;
+  // Pending user Read() callback (WS path or TCP VLESS response strip).
+  CompletionOnceCallback pending_read_callback_;
 
   // WS write state: keeps the framed buffer alive during async transport writes.
-  scoped_refptr<IOBuffer> ws_pending_write_buf_;
+  scoped_refptr<DrainableIOBuffer> ws_pending_write_buf_;
   int ws_pending_write_original_len_ = 0;
   CompletionOnceCallback ws_pending_write_callback_;
 
