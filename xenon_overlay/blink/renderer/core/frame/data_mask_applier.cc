@@ -4,7 +4,6 @@
 
 #include "xenon_overlay/blink/renderer/core/frame/data_mask_applier.h"
 
-#include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/node_traversal.h"
@@ -20,11 +19,6 @@
 namespace blink {
 
 namespace {
-
-const AtomicString& DataMaskRootMarkerAttribute() {
-  DEFINE_STATIC_LOCAL(const AtomicString, attr, ("data-blink-internal-datamask"));
-  return attr;
-}
 
 bool IsUnderNonMaskableElement(const Element* start) {
   for (const Element* e = start; e; e = e->parentElement()) {
@@ -147,18 +141,6 @@ void ApplyDataMaskForLocalFrame(LocalFrame& frame) {
     return;
   }
 
-  // Hide the document while `Frame::IsLoading()` so intermediate paints cannot
-  // reveal sensitive plaintext; unhide only after loading completes (below).
-  if (frame.IsLoading() && !frame.data_mask_document_visibility_suppressed_) {
-    if (Element* root = doc->documentElement()) {
-      const AtomicString& marker = DataMaskRootMarkerAttribute();
-      root->setAttribute(marker, String("1"));
-      root->SetInlineStyleProperty(CSSPropertyID::kVisibility, String("hidden"),
-                                   /*important=*/true);
-      frame.data_mask_document_visibility_suppressed_ = true;
-    }
-  }
-
   for (Node& node : NodeTraversal::InclusiveDescendantsOf(*doc)) {
     auto* text = DynamicTo<Text>(node);
     if (!text) {
@@ -171,17 +153,6 @@ void ApplyDataMaskForLocalFrame(LocalFrame& frame) {
     }
   }
 
-  if (!frame.IsLoading() && frame.data_mask_document_visibility_suppressed_) {
-    if (Element* root = doc->documentElement()) {
-      const AtomicString& marker = DataMaskRootMarkerAttribute();
-      if (root->getAttribute(marker) == "1") {
-        root->removeAttribute(marker);
-        root->RemoveInlineStyleProperty(CSSPropertyID::kVisibility);
-      }
-    }
-    frame.data_mask_document_visibility_suppressed_ = false;
-  }
-
   frame.EnsureDataMaskSubtreeObserver();
   frame.ScheduleDataMaskApplyPumpIfNeeded();
 }
@@ -189,20 +160,6 @@ void ApplyDataMaskForLocalFrame(LocalFrame& frame) {
 void ResetDataMaskPresentationState(LocalFrame& frame) {
   frame.ClearDataMaskMutationObserver();
   frame.data_mask_load_pump_scheduled_ = false;
-  if (Document* doc = frame.GetDocument()) {
-    if (frame.data_mask_document_visibility_suppressed_) {
-      if (Element* root = doc->documentElement()) {
-        const AtomicString& marker = DataMaskRootMarkerAttribute();
-        if (root->getAttribute(marker) == "1") {
-          root->removeAttribute(marker);
-          root->RemoveInlineStyleProperty(CSSPropertyID::kVisibility);
-        }
-      }
-      frame.data_mask_document_visibility_suppressed_ = false;
-    }
-  } else {
-    frame.data_mask_document_visibility_suppressed_ = false;
-  }
 }
 
 }  // namespace blink

@@ -39,17 +39,16 @@
 - **时序**：`SendData` 往往发生在 **文档仍解析中**，DOM 不完整 → 只做一次遍历会 **漏节点**（例如只有标题、没有正文）。
 - **动态 DOM**：脚本或解析器后续插入/修改文本 → 已打码节点被替换或新节点未扫描 → **明文回退**。
 
-Blink 侧配套机制（思路接近 aiswork 等产品里的根 observer + 加载期抑制闪烁）：
+Blink 侧配套机制（根 observer + loading pump，**不再**在加载期整体隐藏 `<html>`，避免影响正常页面呈现）：
 
 | 机制 | 目的 | 主要代码位置 |
 |------|------|----------------|
 | **DOMContentLoaded** 后再 Apply | 主文档结构就绪后补扫描 | `LocalFrameClientImpl::DispatchDidDispatchDOMContentLoadedEvent` |
 | **FinishedLoading** 后再 Apply | 加载收尾、晚到内容（如 title）补扫描 | `LocalFrame::FinishedLoading` |
-| **加载中对 `<html>` 隐藏可见性** | 中间 paint 不暴露未遍历到的明文 | `data_mask_applier.cc` 与 `LocalFrame::IsLoading()`、`data_mask_document_visibility_suppressed_` |
 | **`documentElement` 子树 MutationObserver** | 子树结构变化 + **文本 characterData** 变化后重扫 | `DataMaskSubtreeObserver` |
 | **Loading 任务队列 pump** | 流式解析期间周期性再 Apply | `ScheduleDataMaskApplyPumpIfNeeded` / `RunDataMaskApplyPump`（`TaskType::kInternalLoading`） |
 
-规则清空时 **`ResetDataMaskPresentationState`**：断开 observer、清理 pump 标记、恢复根节点可见性。
+规则清空时 **`ResetDataMaskPresentationState`**：断开 observer、清理 pump 标记。
 
 ```mermaid
 sequenceDiagram
@@ -67,7 +66,6 @@ sequenceDiagram
   LF->>OBS: Ensure（观察 html）
   OBS->>APP: Mutation Deliver → Apply
   LF->>APP: FinishedLoading
-  Note over APP: 非 loading：解除根 visibility 抑制
 ```
 
 ---
@@ -108,7 +106,7 @@ flowchart LR
 - 成员：`data_mask_rules_`、`data_mask_xpath_config_`（类型为 `mojom::blink::DataMaskRulesPtr` / `XPathConfigPtr`）。
 - API：`SetDataMaskRules`、`GetDataMaskRules`、`SetDataMaskXPathConfig`、`GetDataMaskXPathConfig`。
 
-**细节**：此处使用 **mojom-blink** 生成的类型（`mojom::blink::`），与 DOM/字符串等非序列化类型在同一进程内使用一致。打码相关的 **observer、pump、可见性抑制字段** 见下文 **§2.5**。
+**细节**：此处使用 **mojom-blink** 生成的类型（`mojom::blink::`），与 DOM/字符串等非序列化类型在同一进程内使用一致。打码相关的 **observer、pump** 等见下文 **§2.5**。
 
 ### 2.2 Blink：`DataMask` Mojo 实现
 
@@ -138,18 +136,12 @@ data_mask_(MakeGarbageCollected<DataMask>(*this, interface_registry)),
 **入口**
 
 - `CORE_EXPORT void ApplyDataMaskForLocalFrame(LocalFrame& frame)`：在 **当前 `Document`** 上做 **包含根在内的深度优先遍历**（`NodeTraversal::InclusiveDescendantsOf`），仅处理 **`Text`** 节点。
-- `CORE_EXPORT void ResetDataMaskPresentationState(LocalFrame& frame)`：规则清空或导航切换时，**释放展示层副作用**（observer、pump 标记、根节点可见性），见下文 `LocalFrame` 私有字段与 **friend** 声明。
+- `CORE_EXPORT void ResetDataMaskPresentationState(LocalFrame& frame)`：规则清空或导航切换时，**释放展示层副作用**（observer、pump 标记），见下文 `LocalFrame` 私有字段与 **friend** 声明。
 
 **前置条件**
 
 - `frame.GetDataMaskRules()` 非空且 **`mask_items` 非空**；否则 `Apply` 直接返回（不做事）。
 - `frame.GetDocument()` 非空。
-
-**加载期「防闪」**
-
-- 当 **`frame.IsLoading()`** 且尚未进入抑制状态时：对 **`documentElement`** 设置内部标记属性（`data-blink-internal-datamask="1"`）并 **`visibility: hidden !important`**（`SetInlineStyleProperty`），置位 `LocalFrame::data_mask_document_visibility_suppressed_`。
-- 当 **不再 loading** 且曾经抑制过：若根上仍有标记则 **`removeAttribute`** + **`RemoveInlineStyleProperty(kVisibility)`**，清标记位。
-- 这样中间 paint 不会把尚未遍历到的明文画出来；加载完成后与正常样式恢复一致。
 
 **单条 `MaskItem` 应用（`TryApplyMaskItemToText`）**
 
@@ -181,7 +173,7 @@ data_mask_(MakeGarbageCollected<DataMask>(*this, interface_registry)),
 | `EnsureDataMaskSubtreeObserver` | 有规则且存在 `documentElement` 时创建/复用 **`DataMaskSubtreeObserver`** |
 | `ScheduleDataMaskApplyPumpIfNeeded` | 仅在 **仍 loading**、有规则、且未排队时，向 **`TaskType::kInternalLoading`** runner `PostTask` **`RunDataMaskApplyPump`** |
 | `RunDataMaskApplyPump` | 清 `data_mask_load_pump_scheduled_` 后再 **`ApplyDataMaskForLocalFrame`**（内层会按需再次 `Schedule`，直到结束 loading） |
-| `friend ApplyDataMaskForLocalFrame` / `ResetDataMaskPresentationState` | 供 applier 访问 **可见性抑制** 与 observer/pump 等 **私有状态**（与 **`CORE_EXPORT` 一致**，避免 Windows 上导出/友元声明不匹配） |
+| `friend ApplyDataMaskForLocalFrame` / `ResetDataMaskPresentationState` | 供 applier 访问 **observer/pump** 等 **私有状态**（与 **`CORE_EXPORT` 一致**，避免 Windows 上导出/友元声明不匹配） |
 
 **其它触发 `ApplyDataMaskForLocalFrame` 的位置**
 
@@ -260,9 +252,9 @@ Xenon 的逻辑运行在 **渲染进程** 的 V8 上下文中，与 Blink 已同
 
 1. **规则入帧**：浏览器 `SendData` 或 Xenon JS `sendDataMaskRules` → `LocalFrame::SetDataMaskRules`。
 2. **首次扫描**：立即 `ApplyDataMaskForLocalFrame`（若文档极早可能几乎无 `Text` 节点）。
-3. **加载中**：若仍 `IsLoading()`，对根元素加 `visibility:hidden`，并可能通过 **loading pump** 多次 Apply。
+3. **加载中**：若仍 `IsLoading()`，可通过 **loading pump** 多次 Apply（**不**修改根元素 `visibility`，避免整页先隐后现）。
 4. **DOMContentLoaded / FinishedLoading**：再次 Apply，覆盖解析后半段产生的节点。
-5. **持续运行**：`EnsureDataMaskSubtreeObserver` 保证 DOM/文本变更后继续 Apply；**非 loading** 时去掉根的临时隐藏样式。
+5. **持续运行**：`EnsureDataMaskSubtreeObserver` 保证 DOM/文本变更后继续 Apply。
 6. **规则撤销**：`SetDataMaskRules` 为空 → `ResetDataMaskPresentationState`。
 
 ### 4.2 接入与验证清单
@@ -306,7 +298,7 @@ Xenon 的逻辑运行在 **渲染进程** 的 V8 上下文中，与 Blink 已同
 | `content::RenderFrameHostImpl` | 浏览器 | `GetDataMask()` 绑定 pipe；`DataMaskPolicy` 等钩子下发规则（示例实现需替换为生产策略） |
 | `blink::DataMask` | 渲染 / Blink | `HeapMojoReceiver` 实现接口；`SendData` → `LocalFrame::SetDataMaskRules` + `Apply`；`SendXpathData` → 仅设 XPath 配置 |
 | `blink::WebLocalFrameImpl` | 渲染 / Blink | 构造 `DataMask` 并注册到 `InterfaceRegistry`；析构路径 `Dispose()` |
-| `blink::LocalFrame` | 渲染 / Blink | **SSOT**：持有 `DataMaskRules` / `XPathConfig`；loading pump、observer、根可见性抑制状态 |
+| `blink::LocalFrame` | 渲染 / Blink | **SSOT**：持有 `DataMaskRules` / `XPathConfig`；loading pump、observer |
 | `blink::LocalFrameClientImpl` | 渲染 / Blink | `DOMContentLoaded` 后触发 `ApplyDataMaskForLocalFrame` |
 | `ApplyDataMaskForLocalFrame` / `ResetDataMaskPresentationState` | 渲染 / Blink（`data_mask_applier`） | 遍历 `Text` 节点匹配并改写；清理展示层副作用 |
 | `blink::DataMaskSubtreeObserver` | 渲染 / Blink | 观察 `<html>` 子树与文本变化，回调中再 `Apply` |

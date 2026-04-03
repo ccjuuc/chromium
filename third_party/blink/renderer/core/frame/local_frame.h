@@ -1140,7 +1140,6 @@ class CORE_EXPORT LocalFrame final
 
   friend CORE_EXPORT void ApplyDataMaskForLocalFrame(LocalFrame&);
   friend CORE_EXPORT void ResetDataMaskPresentationState(LocalFrame&);
-  bool data_mask_document_visibility_suppressed_ = false;
   bool data_mask_load_pump_scheduled_ = false;
 
   Member<DataMaskSubtreeObserver> data_mask_mutation_observer_;
