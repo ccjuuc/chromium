@@ -132,6 +132,10 @@ NET_EXPORT ProxyServer::Scheme GetSchemeFromUriScheme(
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
 // Built-in default fixed proxy when |chromium_leaf_builtin_default_proxy| is true.
 NET_EXPORT extern const char kChromiumLeafDefaultProxyUri[];
+// Comma-separated host patterns for default prefs: with |reverse_bypass| true,
+// only matching hosts use the fixed proxy; empty = no hosts use VLESS until
+// the user sets |bypass_list| in proxy prefs.
+NET_EXPORT extern const char kChromiumLeafDefaultProxyHostPatterns[];
 #endif
 
 }  // namespace net

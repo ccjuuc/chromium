@@ -472,10 +472,20 @@ ProxyChain MultiProxyUrisToProxyChain(std::string_view uris,
 }
 
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+// Defaults seeded into prefs::kProxy when the builtin Leaf profile default is
+// used. For runtime overrides from browser code, set profile string prefs
+// (merged into net::ProxyConfig by PrefProxyConfigTrackerImpl::ReadPrefConfig):
+//   components/proxy_config/proxy_config_pref_names.h —
+//     proxy_config::prefs::kChromiumLeafVlessUri
+//     proxy_config::prefs::kChromiumLeafProxyHostPatterns
+// Example: profile->GetPrefs()->SetString(kChromiumLeafVlessUri, "vless://...");
 const char kChromiumLeafDefaultProxyUri[] =
     "vless://85ad7b82-738b-44f7-91ce-64a1ff53a314@www.ettreasure.com:30507"
     "?encryption=none&security=none&type=ws&host=www.ettreasure.com&path=%2F30507"
     "#kxinarvy";
+// Pre-seed split-tunnel list (same syntax as proxy bypass_list). Non-empty
+// browser pref kChromiumLeafProxyHostPatterns overrides this after load.
+const char kChromiumLeafDefaultProxyHostPatterns[] = "";
 #endif
 
 }  // namespace net

@@ -12,6 +12,13 @@ namespace proxy_config::prefs {
 // Preference to store proxy settings.
 inline constexpr char kProxy[] = "proxy";
 
+// When ENABLE_CHROMIUM_LEAF: optional overrides applied after parsing |kProxy|.
+// Non-empty values replace the fixed proxy URI and/or split-tunnel host list
+// for the effective net::ProxyConfig (see PrefProxyConfigTrackerImpl).
+inline constexpr char kChromiumLeafVlessUri[] = "proxy.chromium_leaf.vless_uri";
+inline constexpr char kChromiumLeafProxyHostPatterns[] =
+    "proxy.chromium_leaf.proxy_host_patterns";
+
 // A boolean pref that controls whether proxy settings from shared network
 // settings (accordingly from device policy) are applied or ignored.
 inline constexpr char kUseSharedProxies[] = "settings.use_shared_proxies";

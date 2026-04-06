@@ -28,10 +28,51 @@
 #include "net/base/proxy_string_util.h"
 #include "net/base/url_util.h"
 #include "net/net_buildflags.h"
+#include "net/proxy_resolution/proxy_config.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
 namespace {
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+// Applies browser-side Leaf prefs on top of the proxy dict-derived config.
+void ApplyChromiumLeafBrowserPrefOverrides(
+    const PrefService* pref_service,
+    net::ProxyConfigWithAnnotation* config) {
+  DCHECK(pref_service);
+  net::ProxyConfig& pc = config->value();
+  if (pc.proxy_rules().type != net::ProxyConfig::ProxyRules::Type::PROXY_LIST) {
+    return;
+  }
+
+  const std::string uri_override =
+      pref_service->GetString(proxy_config::prefs::kChromiumLeafVlessUri);
+  if (!uri_override.empty()) {
+    bool allow_bracketed = false;
+    bool allow_quic = false;
+#if BUILDFLAG(ENABLE_BRACKETED_PROXY_URIS)
+    allow_bracketed = true;
+#endif
+#if BUILDFLAG(ENABLE_QUIC_PROXY_SUPPORT)
+    allow_quic = true;
+#endif
+    net::ProxyConfig::ProxyRules parsed;
+    parsed.ParseFromString(uri_override, allow_bracketed, allow_quic);
+    if (parsed.type == net::ProxyConfig::ProxyRules::Type::PROXY_LIST &&
+        !parsed.single_proxies.IsEmpty()) {
+      pc.proxy_rules().single_proxies = parsed.single_proxies;
+      pc.proxy_rules().type = net::ProxyConfig::ProxyRules::Type::PROXY_LIST;
+    }
+  }
+
+  const std::string patterns = pref_service->GetString(
+      proxy_config::prefs::kChromiumLeafProxyHostPatterns);
+  if (!patterns.empty()) {
+    pc.proxy_rules().bypass_rules.ParseFromString(patterns);
+    pc.proxy_rules().reverse_bypass = true;
+  }
+}
+#endif  // ENABLE_CHROMIUM_LEAF
 
 constexpr net::NetworkTrafficAnnotationTag
     kSettingsProxyConfigTrafficAnnotation =
@@ -459,6 +500,16 @@ PrefProxyConfigTrackerImpl::PrefProxyConfigTrackerImpl(
         base::BindRepeating(&PrefProxyConfigTrackerImpl::OnProxyPrefChanged,
                             base::Unretained(this)));
   }
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  proxy_prefs_.Add(
+      proxy_config::prefs::kChromiumLeafVlessUri,
+      base::BindRepeating(&PrefProxyConfigTrackerImpl::OnProxyPrefChanged,
+                          base::Unretained(this)));
+  proxy_prefs_.Add(
+      proxy_config::prefs::kChromiumLeafProxyHostPatterns,
+      base::BindRepeating(&PrefProxyConfigTrackerImpl::OnProxyPrefChanged,
+                          base::Unretained(this)));
+#endif
 }
 
 PrefProxyConfigTrackerImpl::~PrefProxyConfigTrackerImpl() {
@@ -583,11 +634,10 @@ void PrefProxyConfigTrackerImpl::RegisterPrefs(PrefRegistrySimple* registry) {
       proxy_config::prefs::kProxy,
       ProxyConfigDictionary::CreateFixedServers(
           std::string(net::kChromiumLeafDefaultProxyUri),
-          "",
-          /*reverse_bypass=*/false));
-  LOG(ERROR) << "[LEAF_PROXY_DEBUG] RegisterPrefs: builtin default "
-                  "fixed_servers (all traffic, no bypass)";
-#else
+          std::string(net::kChromiumLeafDefaultProxyHostPatterns),
+          /*reverse_bypass=*/true));
+#endif
+#if !(BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY))
   registry->RegisterDictionaryPref(proxy_config::prefs::kProxy,
                                    ProxyConfigDictionary::CreateSystem());
 #endif
@@ -596,6 +646,11 @@ void PrefProxyConfigTrackerImpl::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(
       proxy_config::prefs::kEnableProxyOverrideRulesForAllUsers, 0);
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  registry->RegisterStringPref(proxy_config::prefs::kChromiumLeafVlessUri, "");
+  registry->RegisterStringPref(
+      proxy_config::prefs::kChromiumLeafProxyHostPatterns, "");
+#endif
 }
 
 // static
@@ -606,10 +661,8 @@ void PrefProxyConfigTrackerImpl::RegisterProfilePrefs(
       proxy_config::prefs::kProxy,
       ProxyConfigDictionary::CreateFixedServers(
           std::string(net::kChromiumLeafDefaultProxyUri),
-          "",
-          /*reverse_bypass=*/false));
-  LOG(ERROR) << "[LEAF_PROXY_DEBUG] RegisterProfilePrefs: builtin default "
-                  "fixed_servers (all traffic, no bypass)";
+          std::string(net::kChromiumLeafDefaultProxyHostPatterns),
+          /*reverse_bypass=*/true));
 #else
   registry->RegisterDictionaryPref(proxy_config::prefs::kProxy,
                                    ProxyConfigDictionary::CreateSystem());
@@ -620,6 +673,11 @@ void PrefProxyConfigTrackerImpl::RegisterProfilePrefs(
   registry->RegisterIntegerPref(proxy_config::prefs::kProxyOverrideRulesScope,
                                 0);
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  registry->RegisterStringPref(proxy_config::prefs::kChromiumLeafVlessUri, "");
+  registry->RegisterStringPref(
+      proxy_config::prefs::kChromiumLeafProxyHostPatterns, "");
+#endif
 }
 
 // static
@@ -643,12 +701,17 @@ ProxyPrefs::ConfigState PrefProxyConfigTrackerImpl::ReadPrefConfig(
   ProxyPrefs::ConfigState state = ProxyPrefs::CONFIG_OTHER_PRECEDE;
   if (!PrefConfigToNetConfig(proxy_dict, config)) {
     state = ProxyPrefs::CONFIG_UNSET;
-  } else if (pref->IsUserModifiable() && !pref->HasUserSetting()) {
-    state = ProxyPrefs::CONFIG_FALLBACK;
-  } else if (pref->IsManaged()) {
-    state = ProxyPrefs::CONFIG_POLICY;
-  } else if (pref->IsExtensionControlled()) {
-    state = ProxyPrefs::CONFIG_EXTENSION;
+  } else {
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+    ApplyChromiumLeafBrowserPrefOverrides(pref_service, config);
+#endif
+    if (pref->IsUserModifiable() && !pref->HasUserSetting()) {
+      state = ProxyPrefs::CONFIG_FALLBACK;
+    } else if (pref->IsManaged()) {
+      state = ProxyPrefs::CONFIG_POLICY;
+    } else if (pref->IsExtensionControlled()) {
+      state = ProxyPrefs::CONFIG_EXTENSION;
+    }
   }
 
   if (SetProxyOverrideRules(pref_service, config) &&
@@ -781,33 +844,6 @@ bool PrefProxyConfigTrackerImpl::PrefConfigToNetConfig(
       if (proxy_dict.GetReverseBypass(&reverse_bypass)) {
         proxy_config.proxy_rules().reverse_bypass = reverse_bypass;
       }
-#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
-      // Profiles may persist reverse_bypass + a tiny bypass list (e.g. only
-      // www.youtube.com), which sends googlevideo.com / ytimg.com / … direct and
-      // breaks media. For Leaf outbound fixed proxies, always full-tunnel.
-      if (proxy_config.proxy_rules().type ==
-          net::ProxyConfig::ProxyRules::Type::PROXY_LIST) {
-        bool any_leaf_outbound = false;
-        for (const net::ProxyChain& chain :
-             proxy_config.proxy_rules().single_proxies.AllChains()) {
-          for (size_t i = 0; i < chain.length(); ++i) {
-            if (chain.GetProxyServer(i).is_leaf_outbound()) {
-              any_leaf_outbound = true;
-              break;
-            }
-          }
-          if (any_leaf_outbound) {
-            break;
-          }
-        }
-        if (any_leaf_outbound) {
-          proxy_config.proxy_rules().bypass_rules.Clear();
-          proxy_config.proxy_rules().reverse_bypass = false;
-          LOG(ERROR) << "[LEAF_PROXY_DEBUG] PrefConfigToNetConfig: forcing "
-                         "full-tunnel (cleared bypass_list, reverse_bypass=0)";
-        }
-      }
-#endif  // ENABLE_CHROMIUM_LEAF && CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
       LOG(ERROR) << "[LEAF_PROXY_DEBUG] PrefConfigToNetConfig MODE_FIXED_SERVERS "
                    << "server_len=" << proxy_server.size()

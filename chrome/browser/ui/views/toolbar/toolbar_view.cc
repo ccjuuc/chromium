@@ -132,7 +132,9 @@
 #include "ui/views/widget/tooltip_manager.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
-#include "xenon_overlay/chrome/browser/ui/xenon_common_bubble.h"
+#include "components/proxy_config/proxy_config_pref_names.h"
+#include "net/base/proxy_string_util.h"
+#include "net/net_buildflags.h"
 
 #if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
 #include "chrome/browser/ui/views/frame/webui_tab_strip_container_view.h"
@@ -484,11 +486,15 @@ void ToolbarView::Init() {
       container_view_->AddChildView(std::make_unique<OverflowButton>());
   overflow_button_->SetVisible(false);
 
-  auto test_bubble_button = std::make_unique<ToolbarButton>(base::BindRepeating(
-      &ToolbarView::TestBubbleButtonPressed, base::Unretained(this)));
-  test_bubble_button->SetVectorIcon(kNewTabToolbarButtonIcon);
-  test_bubble_button->SetTooltipText(u"Show test bubble");
-  test_bubble_button_ = container_view_->AddChildView(std::move(test_bubble_button));
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+  auto chromium_leaf_proxy_pref_button = std::make_unique<ToolbarButton>(
+      base::BindRepeating(&ToolbarView::ChromiumLeafProxyPrefButtonPressed,
+                          base::Unretained(this)));
+  chromium_leaf_proxy_pref_button->SetVectorIcon(kNewTabToolbarButtonIcon);
+  chromium_leaf_proxy_pref_button->SetTooltipText(u"写入 Leaf 代理 pref（内置 VLESS / 分流）");
+  chromium_leaf_proxy_pref_button_ = container_view_->AddChildView(
+      std::move(chromium_leaf_proxy_pref_button));
+#endif
 
   auto app_menu_button = std::make_unique<BrowserAppMenuButton>(this);
   app_menu_button->SetFlipCanvasOnPaintForRTLUI(true);
@@ -907,11 +913,21 @@ void ToolbarView::NewTabButtonPressed(const ui::Event& event) {
                  NewTabTypes::kNewTabButtonInToolbarForTouch);
 }
 
-void ToolbarView::TestBubbleButtonPressed(const ui::Event& event) {
-  if (!test_bubble_button_) {
+void ToolbarView::ChromiumLeafProxyPrefButtonPressed(const ui::Event& event) {
+  (void)event;
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
+  if (!browser_ || !browser_->profile()) {
     return;
   }
-  xenon::XenonCommonBubble::Show(test_bubble_button_, u"Toolbar test bubble");
+  PrefService* prefs = browser_->profile()->GetPrefs();
+  if (!prefs) {
+    return;
+  }
+  prefs->SetString(proxy_config::prefs::kChromiumLeafVlessUri,
+                   net::kChromiumLeafDefaultProxyUri);
+  prefs->SetString(proxy_config::prefs::kChromiumLeafProxyHostPatterns,
+                   net::kChromiumLeafDefaultProxyHostPatterns);
+#endif
 }
 
 bool ToolbarView::AcceleratorPressed(const ui::Accelerator& accelerator) {
