@@ -11,6 +11,9 @@
 #include "net/base/proxy_chain.h"
 #include "net/base/proxy_server.h"
 #include "net/net_buildflags.h"
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+#include "net/socket/chromium_leaf_vless_handshake.h"
+#endif
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
@@ -510,6 +513,19 @@ TEST(ProxySpecificationUtilTest, VmessShareLinkBase64Json) {
 }
 
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+TEST(ProxySpecificationUtilTest, TrojanHandshakeMatchesXrayLayout) {
+  std::vector<uint8_t> h = LeafTrojanBuildRelayHandshake("pw", "example.com", 443);
+  ASSERT_FALSE(h.empty());
+  constexpr size_t kHostLen = 11;  // "example.com"
+  // 56 hex + CRLF + cmd + atyp(3) + len + host + port(2) + CRLF
+  ASSERT_EQ(56u + 2u + 1u + 1u + 1u + kHostLen + 2u + 2u, h.size());
+  EXPECT_EQ('\r', h[56]);
+  EXPECT_EQ('\n', h[57]);
+  EXPECT_EQ(1u, h[58]) << "TCP command byte (Xray trojan ConnWriter)";
+  EXPECT_EQ(3u, h[59]) << "domain address type";
+  EXPECT_EQ(static_cast<uint8_t>(kHostLen), h[60]);
+}
+
 TEST(ProxySpecificationUtilTest, VlessXraySharingLinkRoundTrip) {
   const char kLink[] =
       "vless://85ad7b82-738b-44f7-91ce-64a1ff53a314@example.com:30507"

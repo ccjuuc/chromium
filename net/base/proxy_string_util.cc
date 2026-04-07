@@ -646,11 +646,15 @@ bool LeafOutboundQueryUsesTransportTls(std::string_view leaf_uri_query) {
 //     proxy_config::prefs::kChromiumLeafProxyHostPatterns
 // Example: profile->GetPrefs()->SetString(kChromiumLeafVlessUri, "vless://...");
 const char* const kChromiumLeafDefaultProxyUris[] = {
-    // [0] Default: VMess over WS+TLS (v2rayN Base64 JSON share).
+    // [0] Default: Trojan over WS+TLS.
+    "trojan://Hw0hemotiQ@www.ettreasure.com:30508"
+    "?type=ws&path=%2F&host=&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1"
+    "#tzw53key",
+    // [1] Alternate: VLESS over WS on 30507.
     "vless://85ad7b82-738b-44f7-91ce-64a1ff53a314@www.ettreasure.com:30507"
     "?encryption=none&security=none&type=ws&host=www.ettreasure.com&path=%2F30507"
     "#kxinarvy",
-    // [1] Alternate VLESS example (plain WS on 30507).
+    // [2] Alternate: VMess (v2rayN Base64 JSON share).
     "vmess://ewogICJ2IjogIjIiLAogICJwcyI6ICJoN2M3bzE5dCIsCiAgImFkZCI6ICJ3d3cuZXR0"
     "cmVhc3VyZS5jb20iLAogICJwb3J0IjogNDQzLAogICJpZCI6ICJiMmFiMTU4MS00MzU4LTRm"
     "NDEtODUzYy1mZTczZWUwNzY5NmIiLAogICJzY3kiOiAiYXV0byIsCiAgIm5ldCI6ICJ3cyIs"

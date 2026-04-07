@@ -31,13 +31,17 @@ namespace net {
 
 namespace {
 
+void CopyPrefixToIOBuffer(IOBuffer* buf, base::span<const uint8_t> src) {
+  CHECK(buf);
+  buf->span().first(src.size()).copy_from(src);
+}
+
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
 bool VmessFeedWsPayload(chromium_leaf::LeafVmessStreamEngine* engine,
                         const std::vector<uint8_t>& payload,
                         std::vector<uint8_t>* pending_plaintext) {
   std::vector<uint8_t> dec;
-  if (!engine->FeedCipherText(
-          base::span<const uint8_t>(payload.data(), payload.size()), &dec)) {
+  if (!engine->FeedCipherText(base::span(payload), &dec)) {
     LOG(ERROR) << "[LEAF_PROXY_DEBUG] VMess FeedCipherText failed (WS payload) "
                << "len=" << payload.size();
     return false;
@@ -133,7 +137,8 @@ int LeafClientSocket::Connect(CompletionOnceCallback callback) {
   net_log_.BeginEvent(NetLogEventType::LEAF_PROXY_CONNECT);
 
   if (protocol_ != LeafOutboundProtocol::kVless &&
-      protocol_ != LeafOutboundProtocol::kVmess) {
+      protocol_ != LeafOutboundProtocol::kVmess &&
+      protocol_ != LeafOutboundProtocol::kTrojan) {
     net_log_.EndEventWithNetErrorCode(NetLogEventType::LEAF_PROXY_CONNECT,
                                       ERR_NOT_IMPLEMENTED);
     return ERR_NOT_IMPLEMENTED;
@@ -144,56 +149,65 @@ int LeafClientSocket::Connect(CompletionOnceCallback callback) {
     return ERR_INVALID_ARGUMENT;
   }
 
-  std::array<uint8_t, 16> uuid{};
-  if (!LeafVlessParseUuid(leaf_credential_, &uuid)) {
-    net_log_.EndEventWithNetErrorCode(NetLogEventType::LEAF_PROXY_CONNECT,
-                                      ERR_INVALID_ARGUMENT);
-    return ERR_INVALID_ARGUMENT;
-  }
-
-  vless_uuid_ = uuid;
-#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
   vmess_engine_.reset();
-  if (protocol_ == LeafOutboundProtocol::kVmess) {
+  if (protocol_ == LeafOutboundProtocol::kTrojan) {
     use_vision_ = false;
     need_strip_vless_response_ = false;
-    std::string cipher = LeafVlessQueryLookup(leaf_uri_query_, "encryption");
-    if (cipher.empty()) {
-      cipher = LeafVlessQueryLookup(leaf_uri_query_, "cipher");
-    }
-    if (cipher.empty()) {
-      cipher = "chacha20-poly1305";
-    }
-    chromium_leaf::VmessSessionMaterial vmess_sess;
-    if (!chromium_leaf::LeafVmessBuildClientRequest(
-            uuid, destination_.host(), destination_.port(), cipher,
-            &handshake_vless_hdr_, &vmess_sess)) {
+    vless_uuid_.fill(0);
+    handshake_vless_hdr_ = LeafTrojanBuildRelayHandshake(
+        leaf_credential_, destination_.host(), destination_.port());
+    if (handshake_vless_hdr_.empty()) {
       net_log_.EndEventWithNetErrorCode(NetLogEventType::LEAF_PROXY_CONNECT,
                                         ERR_INVALID_ARGUMENT);
       return ERR_INVALID_ARGUMENT;
     }
-    vmess_engine_ =
-        std::make_unique<chromium_leaf::LeafVmessStreamEngine>(vmess_sess);
-    VLOG(1) << "[LEAF_PROXY_DEBUG] LeafClientSocket VMess client hello built "
-            << "dest=" << destination_.ToString() << " cipher=" << cipher
-            << " authority_host=" << leaf_proxy_authority_host_
-            << " underlying_negotiated_alpn="
-            << NextProtoToString(transport_socket_->GetNegotiatedProtocol());
+    VLOG(1) << "[LEAF_PROXY_DEBUG] LeafClientSocket Trojan relay header built "
+            << "dest=" << destination_.ToString()
+            << " authority_host=" << leaf_proxy_authority_host_;
   } else {
-    const std::string flow =
-        base::ToLowerASCII(LeafVlessQueryLookup(leaf_uri_query_, "flow"));
-    use_vision_ = (flow == "xtls-rprx-vision");
-    handshake_vless_hdr_ =
-        use_vision_ ? LeafVlessBuildVisionRequestHeader(
-                          uuid, destination_.host(), destination_.port())
-                    : LeafVlessBuildRequestHeader(uuid, destination_.host(),
-                                                  destination_.port());
+    std::array<uint8_t, 16> uuid{};
+    if (!LeafVlessParseUuid(leaf_credential_, &uuid)) {
+      net_log_.EndEventWithNetErrorCode(NetLogEventType::LEAF_PROXY_CONNECT,
+                                        ERR_INVALID_ARGUMENT);
+      return ERR_INVALID_ARGUMENT;
+    }
+    vless_uuid_ = uuid;
+    if (protocol_ == LeafOutboundProtocol::kVmess) {
+      use_vision_ = false;
+      need_strip_vless_response_ = false;
+      std::string cipher = LeafVlessQueryLookup(leaf_uri_query_, "encryption");
+      if (cipher.empty()) {
+        cipher = LeafVlessQueryLookup(leaf_uri_query_, "cipher");
+      }
+      if (cipher.empty()) {
+        cipher = "chacha20-poly1305";
+      }
+      chromium_leaf::VmessSessionMaterial vmess_sess;
+      if (!chromium_leaf::LeafVmessBuildClientRequest(
+              uuid, destination_.host(), destination_.port(), cipher,
+              &handshake_vless_hdr_, &vmess_sess)) {
+        net_log_.EndEventWithNetErrorCode(NetLogEventType::LEAF_PROXY_CONNECT,
+                                          ERR_INVALID_ARGUMENT);
+        return ERR_INVALID_ARGUMENT;
+      }
+      vmess_engine_ =
+          std::make_unique<chromium_leaf::LeafVmessStreamEngine>(vmess_sess);
+      VLOG(1) << "[LEAF_PROXY_DEBUG] LeafClientSocket VMess client hello built "
+              << "dest=" << destination_.ToString() << " cipher=" << cipher
+              << " authority_host=" << leaf_proxy_authority_host_
+              << " underlying_negotiated_alpn="
+              << NextProtoToString(transport_socket_->GetNegotiatedProtocol());
+    } else {
+      const std::string flow =
+          base::ToLowerASCII(LeafVlessQueryLookup(leaf_uri_query_, "flow"));
+      use_vision_ = (flow == "xtls-rprx-vision");
+      handshake_vless_hdr_ =
+          use_vision_ ? LeafVlessBuildVisionRequestHeader(
+                            uuid, destination_.host(), destination_.port())
+                      : LeafVlessBuildRequestHeader(
+                            uuid, destination_.host(), destination_.port());
+    }
   }
-#else
-  use_vision_ = false;
-  handshake_vless_hdr_ =
-      LeafVlessBuildRequestHeader(uuid, destination_.host(), destination_.port());
-#endif
   if (handshake_vless_hdr_.empty()) {
     net_log_.EndEventWithNetErrorCode(NetLogEventType::LEAF_PROXY_CONNECT,
                                       ERR_INVALID_ARGUMENT);
@@ -528,7 +542,7 @@ void LeafClientSocket::Disconnect() {
   ws_message_fragment_.clear();
   ws_in_fragment_message_ = false;
   ws_read_buf_ = nullptr;
-  ws_user_read_dst_ = nullptr;
+  ws_user_read_buf_ = nullptr;
   ws_user_read_len_ = 0;
   pending_read_callback_.Reset();
   ws_pending_write_buf_ = nullptr;
@@ -610,7 +624,7 @@ bool LeafClientSocket::PopOneWebSocketFrame(std::vector<uint8_t>* accumulator,
     if (accumulator->size() < i + 4) {
       return false;
     }
-    memcpy(mask, accumulator->data() + i, 4);
+    base::span(mask).copy_from(base::span(*accumulator).subspan(i, 4u));
     i += 4;
   }
   if (plen > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
@@ -664,8 +678,7 @@ bool LeafClientSocket::PullNextCompleteWsMessageIntoPending() {
         }
         if (use_vision_) {
           DCHECK(vision_parser_);
-          std::vector<uint8_t> out = vision_parser_->Feed(
-              base::span<const uint8_t>(payload.data(), payload.size()));
+          std::vector<uint8_t> out = vision_parser_->Feed(base::span(payload));
           pending_plaintext_.insert(pending_plaintext_.end(), out.begin(),
                                     out.end());
           return !pending_plaintext_.empty();
@@ -685,8 +698,7 @@ bool LeafClientSocket::PullNextCompleteWsMessageIntoPending() {
       }
       if (use_vision_) {
         DCHECK(vision_parser_);
-        std::vector<uint8_t> out = vision_parser_->Feed(
-            base::span<const uint8_t>(payload.data(), payload.size()));
+        std::vector<uint8_t> out = vision_parser_->Feed(base::span(payload));
         pending_plaintext_.insert(pending_plaintext_.end(), out.begin(),
                                  out.end());
         return !pending_plaintext_.empty();
@@ -715,8 +727,8 @@ bool LeafClientSocket::PullNextCompleteWsMessageIntoPending() {
         }
         if (use_vision_) {
           DCHECK(vision_parser_);
-          std::vector<uint8_t> out = vision_parser_->Feed(base::span<const uint8_t>(
-              ws_message_fragment_.data(), ws_message_fragment_.size()));
+          std::vector<uint8_t> out =
+              vision_parser_->Feed(base::span(ws_message_fragment_));
           ws_message_fragment_.clear();
           ws_in_fragment_message_ = false;
           pending_plaintext_.insert(pending_plaintext_.end(), out.begin(),
@@ -746,13 +758,15 @@ void LeafClientSocket::OnWsTransportRead(int result) {
     return;
   }
 
-  ws_rx_accumulator_.insert(ws_rx_accumulator_.end(), ws_read_buf_->data(),
-                            ws_read_buf_->data() + result);
+  {
+    auto chunk = ws_read_buf_->first(static_cast<size_t>(result));
+    ws_rx_accumulator_.insert(ws_rx_accumulator_.end(), chunk.begin(),
+                              chunk.end());
+  }
 
   while (PullNextCompleteWsMessageIntoPending()) {}
 
   int user_len = ws_user_read_len_;
-  char* user_dst = ws_user_read_dst_.get();
   if (!pending_plaintext_.empty()) {
     // Strip the VLESS server response header from the first payload.
     if (need_strip_vless_response_) {
@@ -777,9 +791,12 @@ void LeafClientSocket::OnWsTransportRead(int result) {
     }
     const int n = static_cast<int>(std::min(
         static_cast<size_t>(user_len), pending_plaintext_.size()));
-    memcpy(user_dst, pending_plaintext_.data(), static_cast<size_t>(n));
+    CopyPrefixToIOBuffer(
+        ws_user_read_buf_.get(),
+        base::as_byte_span(pending_plaintext_).first(static_cast<size_t>(n)));
     pending_plaintext_.erase(pending_plaintext_.begin(),
                              pending_plaintext_.begin() + n);
+    ws_user_read_buf_ = nullptr;
     std::move(pending_read_callback_).Run(n);
     return;
   }
@@ -835,8 +852,10 @@ void LeafClientSocket::OnTcpVlessStripReadComplete(
   }
 
   if (handshake_tcp_prefix_read_ < 2) {
-    memcpy(handshake_tcp_prefix_.data() + handshake_tcp_prefix_read_,
-           handshake_read_buf_->data(), static_cast<size_t>(result));
+    base::span(handshake_tcp_prefix_)
+        .subspan(static_cast<size_t>(handshake_tcp_prefix_read_),
+                 static_cast<size_t>(result))
+        .copy_from(handshake_read_buf_->first(static_cast<size_t>(result)));
     handshake_tcp_prefix_read_ += result;
     if (handshake_tcp_prefix_read_ < 2) {
       const int need = 2 - handshake_tcp_prefix_read_;
@@ -880,7 +899,8 @@ int LeafClientSocket::ReadWithoutFraming(IOBuffer* buf,
       if (!vision_rx_queue_.empty()) {
         const int n = static_cast<int>(std::min(
             static_cast<size_t>(buf_len), vision_rx_queue_.size()));
-        memcpy(buf->data(), vision_rx_queue_.data(), static_cast<size_t>(n));
+        CopyPrefixToIOBuffer(
+            buf, base::as_byte_span(vision_rx_queue_).first(static_cast<size_t>(n)));
         vision_rx_queue_.erase(
             vision_rx_queue_.begin(),
             vision_rx_queue_.begin() + static_cast<ptrdiff_t>(n));
@@ -903,10 +923,8 @@ int LeafClientSocket::ReadWithoutFraming(IOBuffer* buf,
       if (rv <= 0) {
         return rv == 0 ? ERR_CONNECTION_CLOSED : rv;
       }
-      std::vector<uint8_t> fed = vision_parser_->Feed(
-          base::span<const uint8_t>(
-              reinterpret_cast<const uint8_t*>(handshake_read_buf_->data()),
-              static_cast<size_t>(rv)));
+      std::vector<uint8_t> fed =
+          vision_parser_->Feed(handshake_read_buf_->first(static_cast<size_t>(rv)));
       vision_rx_queue_.insert(vision_rx_queue_.end(), fed.begin(), fed.end());
     }
   }
@@ -915,7 +933,8 @@ int LeafClientSocket::ReadWithoutFraming(IOBuffer* buf,
       if (!vmess_rx_plain_.empty()) {
         const int n = static_cast<int>(std::min(
             static_cast<size_t>(buf_len), vmess_rx_plain_.size()));
-        memcpy(buf->data(), vmess_rx_plain_.data(), static_cast<size_t>(n));
+        CopyPrefixToIOBuffer(
+            buf, base::as_byte_span(vmess_rx_plain_).first(static_cast<size_t>(n)));
         vmess_rx_plain_.erase(
             vmess_rx_plain_.begin(),
             vmess_rx_plain_.begin() + static_cast<ptrdiff_t>(n));
@@ -939,10 +958,7 @@ int LeafClientSocket::ReadWithoutFraming(IOBuffer* buf,
       }
       std::vector<uint8_t> dec;
       if (!vmess_engine_->FeedCipherText(
-              base::span<const uint8_t>(
-                  reinterpret_cast<const uint8_t*>(vmess_read_buf_->data()),
-                  static_cast<size_t>(rv)),
-              &dec)) {
+              vmess_read_buf_->first(static_cast<size_t>(rv)), &dec)) {
         LOG(ERROR) << "[LEAF_PROXY_DEBUG] VMess FeedCipherText failed "
                    << "(sync transport read) ct_len=" << rv;
         return ERR_FAILED;
@@ -969,8 +985,10 @@ int LeafClientSocket::ReadWithoutFraming(IOBuffer* buf,
       if (rv <= 0) {
         return rv == 0 ? ERR_CONNECTION_CLOSED : rv;
       }
-      memcpy(handshake_tcp_prefix_.data() + handshake_tcp_prefix_read_,
-             handshake_read_buf_->data(), static_cast<size_t>(rv));
+      base::span(handshake_tcp_prefix_)
+          .subspan(static_cast<size_t>(handshake_tcp_prefix_read_),
+                   static_cast<size_t>(rv))
+          .copy_from(handshake_read_buf_->first(static_cast<size_t>(rv)));
       handshake_tcp_prefix_read_ += rv;
       continue;
     }
@@ -1025,10 +1043,8 @@ void LeafClientSocket::OnVisionTransportRead(int result) {
     return;
   }
 
-  std::vector<uint8_t> fed = vision_parser_->Feed(
-      base::span<const uint8_t>(
-          reinterpret_cast<const uint8_t*>(handshake_read_buf_->data()),
-          static_cast<size_t>(result)));
+  std::vector<uint8_t> fed =
+      vision_parser_->Feed(handshake_read_buf_->first(static_cast<size_t>(result)));
   vision_rx_queue_.insert(vision_rx_queue_.end(), fed.begin(), fed.end());
 
   if (vision_rx_queue_.empty()) {
@@ -1044,8 +1060,9 @@ void LeafClientSocket::OnVisionTransportRead(int result) {
 
   const int n = std::min(vision_pending_user_len_,
                          static_cast<int>(vision_rx_queue_.size()));
-  memcpy(vision_pending_user_buf_->data(), vision_rx_queue_.data(),
-         static_cast<size_t>(n));
+  CopyPrefixToIOBuffer(
+      vision_pending_user_buf_.get(),
+      base::as_byte_span(vision_rx_queue_).first(static_cast<size_t>(n)));
   vision_rx_queue_.erase(
       vision_rx_queue_.begin(),
       vision_rx_queue_.begin() + static_cast<ptrdiff_t>(n));
@@ -1085,7 +1102,8 @@ int LeafClientSocket::ReadWithWsFraming(IOBuffer* buf,
           continue;  // Need to read more data from transport.
         }
       }
-      memcpy(buf->data(), pending_plaintext_.data(), to_copy);
+      CopyPrefixToIOBuffer(
+          buf, base::as_byte_span(pending_plaintext_).first(to_copy));
       pending_plaintext_.erase(
           pending_plaintext_.begin(),
           pending_plaintext_.begin() + static_cast<ptrdiff_t>(to_copy));
@@ -1096,7 +1114,8 @@ int LeafClientSocket::ReadWithWsFraming(IOBuffer* buf,
       to_copy =
           std::min(static_cast<size_t>(buf_len), pending_plaintext_.size());
       if (to_copy > 0) {
-        memcpy(buf->data(), pending_plaintext_.data(), to_copy);
+        CopyPrefixToIOBuffer(
+            buf, base::as_byte_span(pending_plaintext_).first(to_copy));
         pending_plaintext_.erase(
             pending_plaintext_.begin(),
             pending_plaintext_.begin() + static_cast<ptrdiff_t>(to_copy));
@@ -1109,7 +1128,7 @@ int LeafClientSocket::ReadWithWsFraming(IOBuffer* buf,
         base::BindOnce(&LeafClientSocket::OnWsTransportRead,
                        weak_factory_.GetWeakPtr()));
     if (rv == ERR_IO_PENDING) {
-      ws_user_read_dst_ = buf->data();
+      ws_user_read_buf_ = scoped_refptr<IOBuffer>(buf);
       ws_user_read_len_ = buf_len;
       pending_read_callback_ = std::move(callback);
       return ERR_IO_PENDING;
@@ -1118,8 +1137,11 @@ int LeafClientSocket::ReadWithWsFraming(IOBuffer* buf,
       return rv;
     }
 
-    ws_rx_accumulator_.insert(ws_rx_accumulator_.end(), ws_read_buf_->data(),
-                              ws_read_buf_->data() + rv);
+    {
+      auto chunk = ws_read_buf_->first(static_cast<size_t>(rv));
+      ws_rx_accumulator_.insert(ws_rx_accumulator_.end(), chunk.begin(),
+                                chunk.end());
+    }
   }
 }
 
@@ -1199,9 +1221,7 @@ int LeafClientSocket::Write(IOBuffer* buf,
     if (buf_len <= 0) {
       return ERR_INVALID_ARGUMENT;
     }
-    vmess_engine_->QueuePlainText(base::span(
-        reinterpret_cast<const uint8_t*>(buf->data()),
-        static_cast<size_t>(buf_len)));
+    vmess_engine_->QueuePlainText(buf->first(static_cast<size_t>(buf_len)));
     vmess_pending_user_write_len_ = buf_len;
     DCHECK(vmess_pending_write_callback_.is_null());
     vmess_pending_write_callback_ = std::move(callback);
@@ -1221,9 +1241,8 @@ int LeafClientSocket::Write(IOBuffer* buf,
   if (buf_len <= 0) {
     return ERR_INVALID_ARGUMENT;
   }
-  auto frame = BuildMaskedWsBinaryFrame(base::span(
-      reinterpret_cast<const uint8_t*>(buf->data()),
-      static_cast<size_t>(buf_len)));
+  auto frame =
+      BuildMaskedWsBinaryFrame(buf->first(static_cast<size_t>(buf_len)));
   if (frame.empty()) {
     return ERR_INVALID_ARGUMENT;
   }
@@ -1295,10 +1314,7 @@ void LeafClientSocket::OnVmessTransportRead(scoped_refptr<IOBuffer> user_buf,
   }
   std::vector<uint8_t> dec;
   if (!vmess_engine_->FeedCipherText(
-          base::span<const uint8_t>(
-              reinterpret_cast<const uint8_t*>(vmess_read_buf_->data()),
-              static_cast<size_t>(result)),
-          &dec)) {
+          vmess_read_buf_->first(static_cast<size_t>(result)), &dec)) {
     LOG(ERROR) << "[LEAF_PROXY_DEBUG] VMess FeedCipherText failed "
                << "(async OnVmessTransportRead) ct_len=" << result;
     std::move(pending_read_callback_).Run(ERR_FAILED);
@@ -1318,7 +1334,9 @@ void LeafClientSocket::OnVmessTransportRead(scoped_refptr<IOBuffer> user_buf,
   }
   const int n = std::min(
       user_buf_len, static_cast<int>(vmess_rx_plain_.size()));
-  memcpy(user_buf->data(), vmess_rx_plain_.data(), static_cast<size_t>(n));
+  CopyPrefixToIOBuffer(
+      user_buf.get(),
+      base::as_byte_span(vmess_rx_plain_).first(static_cast<size_t>(n)));
   vmess_rx_plain_.erase(
       vmess_rx_plain_.begin(),
       vmess_rx_plain_.begin() + static_cast<ptrdiff_t>(n));

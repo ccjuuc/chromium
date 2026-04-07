@@ -18,6 +18,9 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+#include "base/strings/string_number_conversions.h"
+#include "net/base/ip_address.h"
+#include "openssl/sha.h"
 #include "third_party/chromium_leaf/src/lib.rs.h"
 #endif
 
@@ -151,6 +154,54 @@ bool LeafVlessVisionParser::direct_copy_rx() const {
 
 bool LeafVlessVisionParser::vision_done() const {
   return net::chromium_leaf::chromium_leaf_vision_parser_vision_done(*impl_);
+}
+
+std::vector<uint8_t> LeafTrojanBuildRelayHandshake(std::string_view password,
+                                                    const std::string& dest_host,
+                                                    uint16_t dest_port) {
+  std::vector<uint8_t> out;
+  if (dest_host.empty()) {
+    return out;
+  }
+  uint8_t digest[SHA224_DIGEST_LENGTH];
+  SHA224(reinterpret_cast<const uint8_t*>(password.data()), password.size(),
+         digest);
+  const std::string hex =
+      base::HexEncodeLower(base::span<const uint8_t>(digest));
+  DCHECK_EQ(hex.size(), 56u);
+  out.assign(hex.begin(), hex.end());
+  out.push_back('\r');
+  out.push_back('\n');
+  // Xray/Leaf trojan: same as github.com/XTLS/Xray-core proxy/trojan/protocol.go
+  // ConnWriter.writeHeader — command byte (TCP=1, UDP=3) precedes SOCKS-style
+  // address. Browser relay is always TCP.
+  constexpr uint8_t kTrojanCommandTcp = 1;
+  out.push_back(kTrojanCommandTcp);
+
+  IPAddress ip;
+  if (ip.AssignFromIPLiteral(dest_host)) {
+    const auto bytes = ip.bytes();
+    if (ip.IsIPv4()) {
+      out.push_back(1);
+      out.insert(out.end(), bytes.begin(), bytes.end());
+    } else {
+      out.push_back(4);
+      out.insert(out.end(), bytes.begin(), bytes.end());
+    }
+  } else {
+    if (dest_host.size() > 255) {
+      out.clear();
+      return out;
+    }
+    out.push_back(3);
+    out.push_back(static_cast<uint8_t>(dest_host.size()));
+    out.insert(out.end(), dest_host.begin(), dest_host.end());
+  }
+  out.push_back(static_cast<uint8_t>(dest_port >> 8));
+  out.push_back(static_cast<uint8_t>(dest_port & 0xff));
+  out.push_back('\r');
+  out.push_back('\n');
+  return out;
 }
 #endif  // ENABLE_CHROMIUM_LEAF
 

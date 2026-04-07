@@ -183,7 +183,7 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
   int vmess_pending_user_write_len_ = 0;
   CompletionOnceCallback vmess_pending_write_callback_;
 #endif
-  raw_ptr<char> ws_user_read_dst_ = nullptr;
+  scoped_refptr<IOBuffer> ws_user_read_buf_;
   int ws_user_read_len_ = 0;
   // Pending user Read() callback (WS path or TCP VLESS response strip).
   CompletionOnceCallback pending_read_callback_;

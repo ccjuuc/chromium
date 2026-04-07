@@ -40,6 +40,14 @@ std::vector<uint8_t> LeafVlessBuildVisionRequestHeader(
     const std::string& dest_host,
     uint16_t dest_port);
 
+// Trojan (Xray-compatible): hex(SHA224(password)) + CRLF + command byte
+// (TCP=1) + SOCKS-like address + CRLF. First payload on TCP or in the first
+// WS binary frame after HTTP 101.
+NET_EXPORT_PRIVATE std::vector<uint8_t> LeafTrojanBuildRelayHandshake(
+    std::string_view password,
+    const std::string& dest_host,
+    uint16_t dest_port);
+
 // Incremental RX parser matching Leaf `VisionParser` (no Tokio).
 class NET_EXPORT_PRIVATE LeafVlessVisionParser {
  public:
