@@ -9,9 +9,16 @@
 #include <string_view>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/strings/stringprintf.h"
+#include "build/buildflag.h"
 #include "net/base/url_util.h"
+#include "net/net_buildflags.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+#include "third_party/chromium_leaf/src/lib.rs.h"
+#endif
 
 namespace net {
 
@@ -58,6 +65,16 @@ std::vector<uint8_t> LeafVlessBuildRequestHeader(
     const std::array<uint8_t, 16>& uuid,
     const std::string& dest_host,
     uint16_t dest_port) {
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  rust::Vec<uint8_t> v = net::chromium_leaf::chromium_leaf_vless_plain_tcp_header(
+      uuid, dest_host, dest_port);
+  std::vector<uint8_t> out;
+  out.reserve(v.size());
+  for (uint8_t b : v) {
+    out.push_back(b);
+  }
+  return out;
+#else
   std::vector<uint8_t> out;
   out.reserve(32 + dest_host.size());
   out.push_back(0);
@@ -73,7 +90,51 @@ std::vector<uint8_t> LeafVlessBuildRequestHeader(
   out.push_back(static_cast<uint8_t>(dest_host.size()));
   out.insert(out.end(), dest_host.begin(), dest_host.end());
   return out;
+#endif
 }
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+std::vector<uint8_t> LeafVlessBuildVisionRequestHeader(
+    const std::array<uint8_t, 16>& uuid,
+    const std::string& dest_host,
+    uint16_t dest_port) {
+  rust::Vec<uint8_t> v = net::chromium_leaf::chromium_leaf_vless_vision_tcp_header(
+      uuid, dest_host, dest_port);
+  std::vector<uint8_t> out;
+  out.reserve(v.size());
+  for (uint8_t b : v) {
+    out.push_back(b);
+  }
+  return out;
+}
+
+LeafVlessVisionParser::LeafVlessVisionParser(
+    const std::array<uint8_t, 16>& uuid)
+    : impl_(net::chromium_leaf::chromium_leaf_vision_parser_new(uuid)) {}
+
+LeafVlessVisionParser::~LeafVlessVisionParser() = default;
+
+std::vector<uint8_t> LeafVlessVisionParser::Feed(
+    base::span<const uint8_t> data) {
+  rust::Slice<const uint8_t> slice(data.data(), data.size());
+  rust::Vec<uint8_t> v =
+      net::chromium_leaf::chromium_leaf_vision_parser_feed(*impl_, slice);
+  std::vector<uint8_t> out;
+  out.reserve(v.size());
+  for (uint8_t b : v) {
+    out.push_back(b);
+  }
+  return out;
+}
+
+bool LeafVlessVisionParser::direct_copy_rx() const {
+  return net::chromium_leaf::chromium_leaf_vision_parser_direct_copy(*impl_);
+}
+
+bool LeafVlessVisionParser::vision_done() const {
+  return net::chromium_leaf::chromium_leaf_vision_parser_vision_done(*impl_);
+}
+#endif  // ENABLE_CHROMIUM_LEAF
 
 std::string LeafVlessQueryLookup(std::string_view query, std::string_view key) {
   if (query.empty()) {

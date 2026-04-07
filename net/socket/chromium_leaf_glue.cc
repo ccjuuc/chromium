@@ -12,7 +12,7 @@
 namespace net {
 
 int ChromiumLeafFfiAbiVersion() {
-  return chromium_leaf::chromium_leaf_ffi_abi_version();
+  return net::chromium_leaf::chromium_leaf_ffi_abi_version();
 }
 
 }  // namespace net

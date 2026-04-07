@@ -2,24 +2,49 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Chromium-facing shim for the upstream Leaf proxy stack (`//third_party/leaf`).
-//!
-//! **Outbound handshake** is implemented here by calling into the `leaf` crate
-//! once it and its Tokio dependency graph are vendored into `//third_party/rust`
-//! and linked from `//third_party/chromium_leaf/BUILD.gn`. Until then,
-//! `chromium_leaf_outbound_handshake` returns `ERR_NOT_IMPLEMENTED` (-11) so
-//! Chromium does not carry a second, hand-rolled VLESS/VMess implementation.
+//! Chromium-facing shim: Leaf VLESS sync framing (`sync_framing`) + cxx FFI.
 
-/// Same as `net::ERR_NOT_IMPLEMENTED` in `net/base/net_error_list.h`.
 const CHROMIUM_NET_ERR_NOT_IMPLEMENTED: i32 = -11;
 
-/// Increment when the cxx / C ABI surface changes.
-pub const CHROMIUM_LEAF_FFI_ABI_VERSION: i32 = 4;
+pub const CHROMIUM_LEAF_FFI_ABI_VERSION: i32 = 6;
 
-#[cxx::bridge(namespace = net::chromium_leaf)]
+mod sync_framing;
+
+#[cxx::bridge(namespace = "net::chromium_leaf")]
 mod ffi {
     extern "Rust" {
+        type ChromiumLeafVisionParser;
+
         fn chromium_leaf_ffi_abi_version() -> i32;
+
+        fn chromium_leaf_vless_plain_tcp_header(
+            uuid: [u8; 16],
+            dest_host: String,
+            dest_port: u16,
+        ) -> Vec<u8>;
+
+        fn chromium_leaf_vless_vision_tcp_header(
+            uuid: [u8; 16],
+            dest_host: String,
+            dest_port: u16,
+        ) -> Vec<u8>;
+
+        fn chromium_leaf_vision_parser_new(
+            uuid: [u8; 16],
+        ) -> Box<ChromiumLeafVisionParser>;
+
+        fn chromium_leaf_vision_parser_feed(
+            parser: Pin<&mut ChromiumLeafVisionParser>,
+            data: &[u8],
+        ) -> Vec<u8>;
+
+        fn chromium_leaf_vision_parser_direct_copy(
+            parser: &ChromiumLeafVisionParser,
+        ) -> bool;
+
+        fn chromium_leaf_vision_parser_vision_done(
+            parser: &ChromiumLeafVisionParser,
+        ) -> bool;
     }
 }
 
@@ -27,10 +52,56 @@ pub fn chromium_leaf_ffi_abi_version() -> i32 {
     CHROMIUM_LEAF_FFI_ABI_VERSION
 }
 
-/// C ABI for `//net/socket/chromium_leaf_glue.cc`. Handshake must eventually
-/// build a Leaf JSON (or session) from the URI pieces and run the matching
-/// `leaf::proxy::*::outbound::Handler` on `tokio::net::TcpStream::from_std(...)`
-/// created from `transport_socket` (platform-specific `RawFd` / `RawSocket`).
+pub fn chromium_leaf_vless_plain_tcp_header(
+    uuid: [u8; 16],
+    dest_host: String,
+    dest_port: u16,
+) -> Vec<u8> {
+    sync_framing::build_vless_tcp_header_plain(&uuid, &dest_host, dest_port, 2)
+}
+
+pub fn chromium_leaf_vless_vision_tcp_header(
+    uuid: [u8; 16],
+    dest_host: String,
+    dest_port: u16,
+) -> Vec<u8> {
+    if dest_host.len() > 255 {
+        return Vec::new();
+    }
+    sync_framing::build_vless_tcp_header(&uuid, &dest_host, dest_port, 2)
+}
+
+pub struct ChromiumLeafVisionParser {
+    inner: sync_framing::VisionParser,
+}
+
+pub fn chromium_leaf_vision_parser_new(
+    uuid: [u8; 16],
+) -> Box<ChromiumLeafVisionParser> {
+    Box::new(ChromiumLeafVisionParser {
+        inner: sync_framing::VisionParser::new(uuid),
+    })
+}
+
+pub fn chromium_leaf_vision_parser_feed(
+    parser: std::pin::Pin<&mut ChromiumLeafVisionParser>,
+    data: &[u8],
+) -> Vec<u8> {
+    parser.get_mut().inner.parse(data)
+}
+
+pub fn chromium_leaf_vision_parser_direct_copy(
+    parser: &ChromiumLeafVisionParser,
+) -> bool {
+    parser.inner.v_direct_copy_rx
+}
+
+pub fn chromium_leaf_vision_parser_vision_done(
+    parser: &ChromiumLeafVisionParser,
+) -> bool {
+    parser.inner.v_vision_done
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chromium_leaf_outbound_handshake(
     _protocol: u32,
@@ -47,7 +118,5 @@ pub unsafe extern "C" fn chromium_leaf_outbound_handshake(
     _leaf_proxy_authority_host: *const std::ffi::c_char,
     _leaf_proxy_authority_host_len: usize,
 ) -> i32 {
-    // TODO: `use leaf::...` after `leaf` + `tokio` are available as GN
-    // `rust_static_library` / `cargo_crate` targets (see README.md).
     CHROMIUM_NET_ERR_NOT_IMPLEMENTED
 }

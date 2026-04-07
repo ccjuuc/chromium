@@ -4,15 +4,18 @@
 
 import("//build/rust/rust_static_library.gni")
 
-# Rust shim for Leaf-related ABI versioning and future typed FFI (`cxx`; see
-# //docs/rust/ffi.md). Outbound handshakes (Trojan, etc.) live in //net C++.
-# Upstream Leaf remains under //third_party/leaf for reference / future gnrt.
+# Rust shim for Leaf-related ABI versioning and typed cxx FFI for VLESS framing.
+# Sync framing sources live under src/ (aligned with upstream Leaf logic).
 
 rust_static_library("chromium_leaf_ffi") {
   allow_unsafe = true  # cxx bridge expands unsafe shims.
   edition = "2024"
   crate_root = "src/lib.rs"
-  sources = [ "src/lib.rs" ]
+  sources = [
+    "src/lib.rs",
+    "src/plain_tcp_header.rs",
+    "src/sync_framing.rs",
+  ]
   cxx_bindings = [ "src/lib.rs" ]
 
   visibility = [ "//net:*" ]

@@ -11,6 +11,15 @@
 #include <string_view>
 #include <vector>
 
+#include "build/buildflag.h"
+#include "net/base/net_export.h"
+#include "net/net_buildflags.h"
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+#include "base/containers/span.h"
+#include "third_party/chromium_leaf/src/lib.rs.h"
+#endif
+
 namespace net {
 
 // Stateless helpers for VLESS outbound framing (used by LeafClientSocket).
@@ -22,6 +31,32 @@ std::vector<uint8_t> LeafVlessBuildRequestHeader(
     const std::array<uint8_t, 16>& uuid,
     const std::string& dest_host,
     uint16_t dest_port);
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+// Xray Vision (xtls-rprx-vision) request header; same semantics as Leaf
+// `build_vless_tcp_header` with domain (addr_type 2).
+std::vector<uint8_t> LeafVlessBuildVisionRequestHeader(
+    const std::array<uint8_t, 16>& uuid,
+    const std::string& dest_host,
+    uint16_t dest_port);
+
+// Incremental RX parser matching Leaf `VisionParser` (no Tokio).
+class NET_EXPORT_PRIVATE LeafVlessVisionParser {
+ public:
+  explicit LeafVlessVisionParser(const std::array<uint8_t, 16>& uuid);
+  ~LeafVlessVisionParser();
+
+  LeafVlessVisionParser(const LeafVlessVisionParser&) = delete;
+  LeafVlessVisionParser& operator=(const LeafVlessVisionParser&) = delete;
+
+  std::vector<uint8_t> Feed(base::span<const uint8_t> data);
+  bool direct_copy_rx() const;
+  bool vision_done() const;
+
+ private:
+  rust::Box<net::chromium_leaf::ChromiumLeafVisionParser> impl_;
+};
+#endif  // ENABLE_CHROMIUM_LEAF
 
 std::string LeafVlessQueryLookup(std::string_view query, std::string_view key);
 

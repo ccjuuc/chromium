@@ -129,8 +129,23 @@ int LeafClientSocket::Connect(CompletionOnceCallback callback) {
     return ERR_INVALID_ARGUMENT;
   }
 
+  vless_uuid_ = uuid;
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  {
+    const std::string flow =
+        base::ToLowerASCII(LeafVlessQueryLookup(leaf_uri_query_, "flow"));
+    use_vision_ = (flow == "xtls-rprx-vision");
+    handshake_vless_hdr_ =
+        use_vision_ ? LeafVlessBuildVisionRequestHeader(
+                          uuid, destination_.host(), destination_.port())
+                    : LeafVlessBuildRequestHeader(uuid, destination_.host(),
+                                                  destination_.port());
+  }
+#else
+  use_vision_ = false;
   handshake_vless_hdr_ =
       LeafVlessBuildRequestHeader(uuid, destination_.host(), destination_.port());
+#endif
   if (handshake_vless_hdr_.empty()) {
     net_log_.EndEventWithNetErrorCode(NetLogEventType::LEAF_PROXY_CONNECT,
                                       ERR_INVALID_ARGUMENT);
@@ -187,6 +202,12 @@ int LeafClientSocket::Connect(CompletionOnceCallback callback) {
       if (handshake_type_ == "ws") {
         ws_framing_ = true;
       }
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+      if (use_vision_) {
+        vision_parser_ =
+            std::make_unique<LeafVlessVisionParser>(vless_uuid_);
+      }
+#endif
     }
   }
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
@@ -211,6 +232,12 @@ void LeafClientSocket::OnHandshakeIOComplete(int result) {
       if (handshake_type_ == "ws") {
         ws_framing_ = true;
       }
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+      if (use_vision_) {
+        vision_parser_ =
+            std::make_unique<LeafVlessVisionParser>(vless_uuid_);
+      }
+#endif
     }
     handshake_state_ = HandshakeState::kNone;
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
@@ -259,9 +286,9 @@ int LeafClientSocket::DoHandshakeLoop(int result) {
         handshake_write_buf_.reset();
         // VLESS server won't reply until the destination server sends data
         // back, which requires the upper layer (TLS) to send its ClientHello
-        // first.  Mark that we need to strip the 2-byte VLESS response prefix
-        // on the first Read(), and declare the handshake complete now.
-        need_strip_vless_response_ = true;
+        // first.  Plain mode strips the 2-byte VLESS response on first Read();
+        // Vision mode uses Leaf VisionParser instead.
+        need_strip_vless_response_ = !use_vision_;
         return OK;
       }
 
@@ -367,8 +394,9 @@ int LeafClientSocket::DoHandshakeLoop(int result) {
         handshake_write_buf_.reset();
         // Same as TCP path: the VLESS server doesn't reply until the
         // destination has data.  Complete the handshake now and defer
-        // stripping the VLESS response to the first ReadWithWsFraming().
-        need_strip_vless_response_ = true;
+        // stripping the VLESS response to the first ReadWithWsFraming(),
+        // unless Vision RX is enabled.
+        need_strip_vless_response_ = !use_vision_;
         return OK;
       }
 
@@ -384,6 +412,14 @@ int LeafClientSocket::DoHandshakeLoop(int result) {
 void LeafClientSocket::Disconnect() {
   completed_handshake_ = false;
   ws_framing_ = false;
+  use_vision_ = false;
+  vless_uuid_.fill(0);
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  vision_parser_.reset();
+  vision_rx_queue_.clear();
+  vision_pending_user_buf_ = nullptr;
+  vision_pending_user_len_ = 0;
+#endif
   handshake_state_ = HandshakeState::kNone;
   user_connect_callback_.Reset();
   vless_tcp_addon_remaining_ = -1;
@@ -523,10 +559,30 @@ bool LeafClientSocket::PullNextCompleteWsMessageIntoPending() {
     }
     if (opcode == 0x2) {
       if (fin) {
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+        if (use_vision_) {
+          DCHECK(vision_parser_);
+          std::vector<uint8_t> out = vision_parser_->Feed(
+              base::span<const uint8_t>(payload.data(), payload.size()));
+          pending_plaintext_.insert(pending_plaintext_.end(), out.begin(),
+                                    out.end());
+          return !pending_plaintext_.empty();
+        }
+#endif
         pending_plaintext_.insert(pending_plaintext_.end(), payload.begin(),
                                   payload.end());
         return true;
       }
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+      if (use_vision_) {
+        DCHECK(vision_parser_);
+        std::vector<uint8_t> out = vision_parser_->Feed(
+            base::span<const uint8_t>(payload.data(), payload.size()));
+        pending_plaintext_.insert(pending_plaintext_.end(), out.begin(),
+                                out.end());
+        return !pending_plaintext_.empty();
+      }
+#endif
       ws_message_fragment_ = std::move(payload);
       ws_in_fragment_message_ = true;
       continue;
@@ -535,6 +591,18 @@ bool LeafClientSocket::PullNextCompleteWsMessageIntoPending() {
       ws_message_fragment_.insert(ws_message_fragment_.end(), payload.begin(),
                                   payload.end());
       if (fin) {
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+        if (use_vision_) {
+          DCHECK(vision_parser_);
+          std::vector<uint8_t> out = vision_parser_->Feed(base::span<const uint8_t>(
+              ws_message_fragment_.data(), ws_message_fragment_.size()));
+          ws_message_fragment_.clear();
+          ws_in_fragment_message_ = false;
+          pending_plaintext_.insert(pending_plaintext_.end(), out.begin(),
+                                    out.end());
+          return !pending_plaintext_.empty();
+        }
+#endif
         pending_plaintext_.insert(
             pending_plaintext_.end(),
             std::make_move_iterator(ws_message_fragment_.begin()),
@@ -682,6 +750,44 @@ void LeafClientSocket::OnTcpVlessStripReadComplete(
 int LeafClientSocket::ReadWithoutFraming(IOBuffer* buf,
                                          int buf_len,
                                          CompletionOnceCallback callback) {
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  if (use_vision_) {
+    DCHECK(vision_parser_);
+    while (true) {
+      if (!vision_rx_queue_.empty()) {
+        const int n = static_cast<int>(std::min(
+            static_cast<size_t>(buf_len), vision_rx_queue_.size()));
+        memcpy(buf->data(), vision_rx_queue_.data(), static_cast<size_t>(n));
+        vision_rx_queue_.erase(
+            vision_rx_queue_.begin(),
+            vision_rx_queue_.begin() + static_cast<ptrdiff_t>(n));
+        return n;
+      }
+      if (!handshake_read_buf_.get()) {
+        handshake_read_buf_ =
+            base::MakeRefCounted<IOBufferWithSize>(kWsReadChunk);
+      }
+      int rv = transport_socket_->Read(
+          handshake_read_buf_.get(), kWsReadChunk,
+          base::BindOnce(&LeafClientSocket::OnVisionTransportRead,
+                         weak_factory_.GetWeakPtr()));
+      if (rv == ERR_IO_PENDING) {
+        vision_pending_user_buf_ = scoped_refptr<IOBuffer>(buf);
+        vision_pending_user_len_ = buf_len;
+        pending_read_callback_ = std::move(callback);
+        return ERR_IO_PENDING;
+      }
+      if (rv <= 0) {
+        return rv == 0 ? ERR_CONNECTION_CLOSED : rv;
+      }
+      std::vector<uint8_t> fed = vision_parser_->Feed(
+          base::span<const uint8_t>(
+              reinterpret_cast<const uint8_t*>(handshake_read_buf_->data()),
+              static_cast<size_t>(rv)));
+      vision_rx_queue_.insert(vision_rx_queue_.end(), fed.begin(), fed.end());
+    }
+  }
+#endif
   // VLESS response: 1-byte version, 1-byte addon length, then |addon| opaque
   // bytes (same layout as LeafVlessStripServerResponse for the WS path).
   while (need_strip_vless_response_) {
@@ -742,6 +848,48 @@ int LeafClientSocket::ReadWithoutFraming(IOBuffer* buf,
 void LeafClientSocket::OnTcpStripFinalReadComplete(int result) {
   std::move(pending_read_callback_).Run(result);
 }
+
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+void LeafClientSocket::OnVisionTransportRead(int result) {
+  DCHECK(!pending_read_callback_.is_null());
+  DCHECK(vision_pending_user_buf_.get());
+  DCHECK(vision_parser_);
+
+  if (result <= 0) {
+    vision_pending_user_buf_ = nullptr;
+    std::move(pending_read_callback_)
+        .Run(result == 0 ? ERR_CONNECTION_CLOSED : result);
+    return;
+  }
+
+  std::vector<uint8_t> fed = vision_parser_->Feed(
+      base::span<const uint8_t>(
+          reinterpret_cast<const uint8_t*>(handshake_read_buf_->data()),
+          static_cast<size_t>(result)));
+  vision_rx_queue_.insert(vision_rx_queue_.end(), fed.begin(), fed.end());
+
+  if (vision_rx_queue_.empty()) {
+    int rv = transport_socket_->Read(
+        handshake_read_buf_.get(), kWsReadChunk,
+        base::BindOnce(&LeafClientSocket::OnVisionTransportRead,
+                       weak_factory_.GetWeakPtr()));
+    if (rv != ERR_IO_PENDING) {
+      OnVisionTransportRead(rv);
+    }
+    return;
+  }
+
+  const int n = std::min(vision_pending_user_len_,
+                         static_cast<int>(vision_rx_queue_.size()));
+  memcpy(vision_pending_user_buf_->data(), vision_rx_queue_.data(),
+         static_cast<size_t>(n));
+  vision_rx_queue_.erase(
+      vision_rx_queue_.begin(),
+      vision_rx_queue_.begin() + static_cast<ptrdiff_t>(n));
+  vision_pending_user_buf_ = nullptr;
+  std::move(pending_read_callback_).Run(n);
+}
+#endif  // ENABLE_CHROMIUM_LEAF
 
 int LeafClientSocket::ReadWithWsFraming(IOBuffer* buf,
                                         int buf_len,
@@ -841,6 +989,11 @@ int LeafClientSocket::ReadIfReady(IOBuffer* buf,
   if (need_strip_vless_response_) {
     return ERR_READ_IF_READY_NOT_IMPLEMENTED;
   }
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  if (use_vision_) {
+    return ERR_READ_IF_READY_NOT_IMPLEMENTED;
+  }
+#endif
   return transport_socket_->ReadIfReady(buf, buf_len, std::move(callback));
 }
 
@@ -854,6 +1007,11 @@ int LeafClientSocket::CancelReadIfReady() {
   if (need_strip_vless_response_) {
     return ERR_READ_IF_READY_NOT_IMPLEMENTED;
   }
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  if (use_vision_) {
+    return ERR_READ_IF_READY_NOT_IMPLEMENTED;
+  }
+#endif
   return transport_socket_->CancelReadIfReady();
 }
 

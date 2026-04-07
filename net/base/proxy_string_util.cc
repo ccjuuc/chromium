@@ -485,7 +485,7 @@ const char kChromiumLeafDefaultProxyUri[] =
     "#kxinarvy";
 // Pre-seed split-tunnel list (same syntax as proxy bypass_list). Non-empty
 // browser pref kChromiumLeafProxyHostPatterns overrides this after load.
-const char kChromiumLeafDefaultProxyHostPatterns[] = "";
+const char kChromiumLeafDefaultProxyHostPatterns[] = "*.baidu.com";
 #endif
 
 }  // namespace net

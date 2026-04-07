@@ -15,11 +15,16 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "build/buildflag.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_export.h"
 #include "net/log/net_log_with_source.h"
+#include "net/net_buildflags.h"
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+#include "net/socket/chromium_leaf_vless_handshake.h"
+#endif
 #include "net/socket/leaf_outbound_protocol.h"
 #include "net/socket/stream_socket.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -102,6 +107,9 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
                                              int user_buf_len);
   void IssueTcpVlessAddonRead(scoped_refptr<IOBuffer> user_buf,
                               int user_buf_len);
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  void OnVisionTransportRead(int result);
+#endif
 
   void OnHandshakeIOComplete(int result);
   int DoHandshakeLoop(int result);
@@ -116,6 +124,8 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
   std::unique_ptr<StreamSocket> transport_socket_;
   HostPortPair destination_;
   const LeafOutboundProtocol protocol_;
+  std::array<uint8_t, 16> vless_uuid_{};
+  bool use_vision_ = false;
   const std::string leaf_credential_;
   std::string leaf_uri_query_;
   std::string leaf_uri_fragment_;
@@ -151,6 +161,12 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
   scoped_refptr<IOBuffer> ws_read_buf_;
   static constexpr int kWsReadChunk = 32 * 1024;
   static constexpr int kHandshakeHeaderReadChunk = 4096;
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  std::unique_ptr<LeafVlessVisionParser> vision_parser_;
+  std::vector<uint8_t> vision_rx_queue_;
+  scoped_refptr<IOBuffer> vision_pending_user_buf_;
+  int vision_pending_user_len_ = 0;
+#endif
   raw_ptr<char> ws_user_read_dst_ = nullptr;
   int ws_user_read_len_ = 0;
   // Pending user Read() callback (WS path or TCP VLESS response strip).
