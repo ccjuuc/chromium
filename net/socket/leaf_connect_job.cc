@@ -21,6 +21,7 @@
 #include "net/base/host_port_pair.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/connect_job_params.h"
+#include "net/socket/ssl_connect_job.h"
 #include "net/socket/transport_connect_job.h"
 #include "url/scheme_host_port.h"
 
@@ -38,7 +39,7 @@ LeafSocketParams::LeafSocketParams(
     std::string leaf_uri_query,
     std::string leaf_uri_fragment,
     std::string leaf_proxy_authority_host)
-    : transport_params_(nested_params.take_transport()),
+    : nested_proxy_connect_params_(std::move(nested_params)),
       destination_(host_port_pair),
       network_anonymization_key_(network_anonymization_key),
       traffic_annotation_(traffic_annotation),
@@ -46,7 +47,10 @@ LeafSocketParams::LeafSocketParams(
       leaf_credential_(std::move(leaf_credential)),
       leaf_uri_query_(std::move(leaf_uri_query)),
       leaf_uri_fragment_(std::move(leaf_uri_fragment)),
-      leaf_proxy_authority_host_(std::move(leaf_proxy_authority_host)) {}
+      leaf_proxy_authority_host_(std::move(leaf_proxy_authority_host)) {
+  DCHECK(nested_proxy_connect_params_.is_transport() ||
+         nested_proxy_connect_params_.is_ssl());
+}
 
 LeafSocketParams::~LeafSocketParams() = default;
 
@@ -172,23 +176,37 @@ int LeafConnectJob::DoTransportConnect() {
 
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
   {
-    const auto& ep = leaf_params_->transport_params()->destination();
     std::string transport_target;
-    if (std::holds_alternative<HostPortPair>(ep)) {
-      transport_target = std::get<HostPortPair>(ep).ToString();
+    const auto& nested = leaf_params_->nested_proxy_connect_params();
+    if (nested.is_transport()) {
+      const auto& ep = nested.transport()->destination();
+      if (std::holds_alternative<HostPortPair>(ep)) {
+        transport_target = std::get<HostPortPair>(ep).ToString();
+      } else {
+        transport_target = std::get<url::SchemeHostPort>(ep).Serialize();
+      }
     } else {
-      transport_target = std::get<url::SchemeHostPort>(ep).Serialize();
+      DCHECK(nested.is_ssl());
+      transport_target =
+          nested.ssl()->host_and_port().ToString() + " (TLS to proxy)";
     }
-    LOG(ERROR) << "[LEAF_PROXY_DEBUG] LeafConnectJob transport TCP to "
-                 << transport_target << " then Leaf handshake for final dest="
-                 << leaf_params_->destination().ToString();
+    VLOG(1) << "[LEAF_PROXY_DEBUG] LeafConnectJob transport to "
+            << transport_target << " then Leaf handshake for final dest="
+            << leaf_params_->destination().ToString();
   }
 #endif
 
   next_state_ = STATE_TRANSPORT_CONNECT_COMPLETE;
-  transport_connect_job_ = std::make_unique<TransportConnectJob>(
-      priority(), socket_tag(), common_connect_job_params(),
-      leaf_params_->transport_params(), this, &net_log());
+  const auto& nested = leaf_params_->nested_proxy_connect_params();
+  if (nested.is_transport()) {
+    transport_connect_job_ = std::make_unique<TransportConnectJob>(
+        priority(), socket_tag(), common_connect_job_params(),
+        nested.transport(), this, &net_log());
+  } else {
+    transport_connect_job_ = std::make_unique<SSLConnectJob>(
+        priority(), socket_tag(), common_connect_job_params(), nested.ssl(),
+        this, &net_log());
+  }
   return transport_connect_job_->Connect();
 }
 
@@ -220,8 +238,8 @@ int LeafConnectJob::DoLeafHandshake() {
 
 int LeafConnectJob::DoLeafHandshakeComplete(int result) {
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-  LOG(ERROR) << "[LEAF_PROXY_DEBUG] LeafConnectJob handshake complete net_error="
-               << result << " dest=" << leaf_params_->destination().ToString();
+  VLOG(1) << "[LEAF_PROXY_DEBUG] LeafConnectJob handshake complete net_error="
+          << result << " dest=" << leaf_params_->destination().ToString();
 #endif
   if (result != OK) {
     socket_->Disconnect();

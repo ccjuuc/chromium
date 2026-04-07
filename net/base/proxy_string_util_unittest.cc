@@ -485,6 +485,30 @@ TEST(ProxySpecificationUtilTest,
 }
 #endif  // BUILDFLAG(ENABLE_BRACKETED_PROXY_URIS)
 
+TEST(ProxySpecificationUtilTest, VmessShareLinkBase64Json) {
+  const char kLink[] =
+      "vmess://ewogICJ2IjogIjIiLAogICJwcyI6ICJoN2M3bzE5dCIsCiAgImFkZCI6ICJ3d3cuZXR0"
+      "cmVhc3VyZS5jb20iLAogICJwb3J0IjogNDQzLAogICJpZCI6ICJiMmFiMTU4MS00MzU4LTRm"
+      "NDEtODUzYy1mZTczZWUwNzY5NmIiLAogICJzY3kiOiAiYXV0byIsCiAgIm5ldCI6ICJ3cyIs"
+      "CiAgInRscyI6ICJ0bHMiLAogICJwYXRoIjogIi8iLAogICJob3N0IjogIiIsCiAgImZwIjog"
+      "ImNocm9tZSIsCiAgImFscG4iOiAiaDIsaHR0cC8xLjEiCn0=";
+  ProxyServer p =
+      ProxyUriToProxyServer(kLink, ProxyServer::SCHEME_HTTP,
+                            /*is_quic_allowed=*/false);
+  ASSERT_TRUE(p.is_valid());
+  EXPECT_TRUE(p.is_vmess());
+  EXPECT_EQ("www.ettreasure.com", p.host_port_pair().host());
+  EXPECT_EQ(443, p.host_port_pair().port());
+  EXPECT_EQ("b2ab1581-4358-4f41-853c-fe73ee07696b", p.credential());
+  EXPECT_NE(std::string::npos, p.leaf_uri_query().find("type=ws"));
+  EXPECT_NE(std::string::npos, p.leaf_uri_query().find("security=tls"));
+  EXPECT_NE(std::string::npos,
+            p.leaf_uri_query().find("encryption=aes-128-gcm"));
+  EXPECT_NE(std::string::npos, p.leaf_uri_query().find("path=%2F"));
+  EXPECT_TRUE(LeafOutboundQueryUsesTransportTls(p.leaf_uri_query()));
+  EXPECT_EQ("h7c7o19t", p.leaf_uri_fragment());
+}
+
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
 TEST(ProxySpecificationUtilTest, VlessXraySharingLinkRoundTrip) {
   const char kLink[] =

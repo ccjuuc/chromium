@@ -8,13 +8,16 @@
 #include <string_view>
 #include <vector>
 
+#include "base/base64.h"
 #include "base/check.h"
+#include "base/json/json_reader.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/values.h"
 #include "build/buildflag.h"
 #include "net/base/proxy_server.h"
 #include "net/base/url_util.h"
@@ -315,6 +318,137 @@ std::string ProxyServerToProxyUri(const ProxyServer& proxy_server) {
   }
 }
 
+namespace {
+
+bool VmessJsonGetPort(const base::Value::Dict& d, int* port_out) {
+  const base::Value* v = d.Find("port");
+  if (!v) {
+    return false;
+  }
+  if (v->is_int()) {
+    *port_out = v->GetInt();
+    return *port_out > 0 && *port_out <= 65535;
+  }
+  if (v->is_string()) {
+    return base::StringToInt(v->GetString(), port_out) && *port_out > 0 &&
+           *port_out <= 65535;
+  }
+  return false;
+}
+
+// vmess://<base64(json)> shares (v2rayN / Clash) — not vmess://uuid@host:port.
+ProxyServer ProxyServerFromVmessShareBase64Json(std::string_view b64_body,
+                                                std::string extra_query,
+                                                std::string leaf_fragment_in) {
+  std::string decoded;
+  if (!base::Base64Decode(b64_body, &decoded,
+                          base::Base64DecodePolicy::kForgiving)) {
+    return ProxyServer();
+  }
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(decoded, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return ProxyServer();
+  }
+  const base::Value::Dict& d = parsed->GetDict();
+
+  const std::string* add = d.FindString("add");
+  const std::string* id = d.FindString("id");
+  if (!add || add->empty() || !id || id->empty()) {
+    return ProxyServer();
+  }
+
+  int port = 0;
+  if (!VmessJsonGetPort(d, &port)) {
+    return ProxyServer();
+  }
+
+  const std::string* net_str = d.FindString("net");
+  std::string net = net_str ? base::ToLowerASCII(*net_str) : "tcp";
+  if (net != "tcp" && net != "ws") {
+    return ProxyServer();
+  }
+
+  std::string leaf_query;
+  auto append_part = [&leaf_query](std::string_view part) {
+    if (!leaf_query.empty()) {
+      leaf_query.push_back('&');
+    }
+    leaf_query.append(part);
+  };
+
+  append_part(
+      base::StrCat({"type=", base::EscapeQueryParamValue(net, /*use_plus=*/false)}));
+
+  const std::string* path_str = d.FindString("path");
+  std::string path = path_str && !path_str->empty() ? *path_str : "/";
+  if (!path.empty() && path[0] != '/') {
+    path.insert(path.begin(), '/');
+  }
+  append_part(base::StrCat(
+      {"path=", base::EscapeQueryParamValue(path, /*use_plus=*/false)}));
+
+  const std::string* host_hdr = d.FindString("host");
+  if (host_hdr && !host_hdr->empty()) {
+    append_part(base::StrCat(
+        {"host=", base::EscapeQueryParamValue(*host_hdr, /*use_plus=*/false)}));
+  }
+
+  bool use_tls = false;
+  if (const std::string* tls_str = d.FindString("tls")) {
+    use_tls = base::EqualsCaseInsensitiveASCII(*tls_str, "tls") ||
+              *tls_str == "1";
+  } else if (std::optional<bool> tls_bool = d.FindBool("tls")) {
+    use_tls = *tls_bool;
+  }
+  if (use_tls) {
+    append_part("security=tls");
+  }
+
+  if (const std::string* sni_str = d.FindString("sni");
+      sni_str && !sni_str->empty()) {
+    append_part(base::StrCat(
+        {"sni=", base::EscapeQueryParamValue(*sni_str, /*use_plus=*/false)}));
+  }
+
+  const std::string* scy = d.FindString("scy");
+  std::string encryption;
+  if (!scy || scy->empty() || base::EqualsCaseInsensitiveASCII(*scy, "auto")) {
+    encryption = "aes-128-gcm";
+  } else {
+    encryption = base::ToLowerASCII(*scy);
+  }
+  append_part(base::StrCat(
+      {"encryption=",
+       base::EscapeQueryParamValue(encryption, /*use_plus=*/false)}));
+
+  if (const std::string* alpn_str = d.FindString("alpn");
+      alpn_str && !alpn_str->empty()) {
+    append_part(base::StrCat(
+        {"alpn=", base::EscapeQueryParamValue(*alpn_str, /*use_plus=*/false)}));
+  }
+
+  if (!extra_query.empty()) {
+    if (!leaf_query.empty()) {
+      leaf_query.push_back('&');
+    }
+    leaf_query.append(extra_query);
+  }
+
+  std::string fragment = std::move(leaf_fragment_in);
+  if (const std::string* ps = d.FindString("ps");
+      fragment.empty() && ps && !ps->empty()) {
+    fragment = *ps;
+  }
+
+  return ProxyServer(ProxyServer::SCHEME_VMESS,
+                     HostPortPair(*add, static_cast<uint16_t>(port)), *id,
+                     std::move(leaf_query), std::move(fragment));
+}
+
+}  // namespace
+
 ProxyServer ProxySchemeHostAndPortToProxyServer(
     ProxyServer::Scheme scheme,
     std::string_view host_and_port) {
@@ -334,6 +468,12 @@ ProxyServer ProxySchemeHostAndPortToProxyServer(
       scheme == ProxyServer::SCHEME_TROJAN;
   if (is_leaf_outbound) {
     LeafStripUriQueryAndFragment(&authority, &leaf_query, &leaf_fragment);
+  }
+
+  if (scheme == ProxyServer::SCHEME_VMESS &&
+      authority.find('@') == std::string_view::npos) {
+    return ProxyServerFromVmessShareBase64Json(
+        authority, std::move(leaf_query), std::move(leaf_fragment));
   }
 
   url::Component username_component;
@@ -471,6 +611,32 @@ ProxyChain MultiProxyUrisToProxyChain(std::string_view uris,
 #endif  // !BUILDFLAG(ENABLE_BRACKETED_PROXY_URIS)
 }
 
+std::string_view LeafUriQueryLookup(std::string_view query,
+                                    std::string_view key) {
+  while (!query.empty()) {
+    size_t amp = query.find('&');
+    std::string_view pair = query.substr(0, amp);
+    if (amp == std::string_view::npos) {
+      query = "";
+    } else {
+      query = query.substr(amp + 1);
+    }
+    size_t eq = pair.find('=');
+    std::string_view k =
+        eq == std::string_view::npos ? pair : pair.substr(0, eq);
+    if (k == key) {
+      return eq == std::string_view::npos ? std::string_view() : pair.substr(eq + 1);
+    }
+  }
+  return {};
+}
+
+bool LeafOutboundQueryUsesTransportTls(std::string_view leaf_uri_query) {
+  std::string_view sec = LeafUriQueryLookup(leaf_uri_query, "security");
+  return base::EqualsCaseInsensitiveASCII(sec, "tls") ||
+         base::EqualsCaseInsensitiveASCII(sec, "xtls");
+}
+
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
 // Defaults seeded into prefs::kProxy when the builtin Leaf profile default is
 // used. For runtime overrides from browser code, set profile string prefs
@@ -479,12 +645,26 @@ ProxyChain MultiProxyUrisToProxyChain(std::string_view uris,
 //     proxy_config::prefs::kChromiumLeafVlessUri
 //     proxy_config::prefs::kChromiumLeafProxyHostPatterns
 // Example: profile->GetPrefs()->SetString(kChromiumLeafVlessUri, "vless://...");
-const char kChromiumLeafDefaultProxyUri[] =
+const char* const kChromiumLeafDefaultProxyUris[] = {
+    // [0] Default: VMess over WS+TLS (v2rayN Base64 JSON share).
     "vless://85ad7b82-738b-44f7-91ce-64a1ff53a314@www.ettreasure.com:30507"
     "?encryption=none&security=none&type=ws&host=www.ettreasure.com&path=%2F30507"
-    "#kxinarvy";
-// Pre-seed split-tunnel list (same syntax as proxy bypass_list). Non-empty
-// browser pref kChromiumLeafProxyHostPatterns overrides this after load.
+    "#kxinarvy",
+    // [1] Alternate VLESS example (plain WS on 30507).
+    "vmess://ewogICJ2IjogIjIiLAogICJwcyI6ICJoN2M3bzE5dCIsCiAgImFkZCI6ICJ3d3cuZXR0"
+    "cmVhc3VyZS5jb20iLAogICJwb3J0IjogNDQzLAogICJpZCI6ICJiMmFiMTU4MS00MzU4LTRm"
+    "NDEtODUzYy1mZTczZWUwNzY5NmIiLAogICJzY3kiOiAiYXV0byIsCiAgIm5ldCI6ICJ3cyIs"
+    "CiAgInRscyI6ICJ0bHMiLAogICJwYXRoIjogIi8iLAogICJob3N0IjogIiIsCiAgImZwIjog"
+    "ImNocm9tZSIsCiAgImFscG4iOiAiaDIsaHR0cC8xLjEiCn0=",
+
+};
+const size_t kChromiumLeafDefaultProxyUriCount =
+    sizeof(kChromiumLeafDefaultProxyUris) / sizeof(kChromiumLeafDefaultProxyUris[0]);
+const char* const kChromiumLeafDefaultProxyUri = kChromiumLeafDefaultProxyUris[0];
+// Pre-seed host patterns (same syntax as proxy bypass_list) for use with
+// reverse_bypass=true in prefs: only matching hosts use the fixed proxy (vmess
+// test target: *.baidu.com); other traffic is direct. kChromiumLeafProxyHostPatterns
+// overrides after load.
 const char kChromiumLeafDefaultProxyHostPatterns[] = "*.baidu.com";
 #endif
 

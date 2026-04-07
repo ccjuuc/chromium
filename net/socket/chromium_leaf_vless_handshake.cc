@@ -4,13 +4,14 @@
 
 #include "net/socket/chromium_leaf_vless_handshake.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/span.h"
-#include "base/strings/stringprintf.h"
 #include "build/buildflag.h"
 #include "net/base/url_util.h"
 #include "net/net_buildflags.h"
@@ -21,6 +22,23 @@
 #endif
 
 namespace net {
+
+namespace {
+
+// Xray does not fix User-Agent; many outbounds set a browser-like UA via
+// streamSettings.headers. This default matches common CDN-facing presets.
+constexpr char kLeafWsDefaultUserAgent[] =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
+    "like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+void StripHeaderInjection(std::string* s) {
+  DCHECK(s);
+  s->erase(std::remove_if(s->begin(), s->end(),
+                          [](unsigned char c) { return c == '\r' || c == '\n'; }),
+           s->end());
+}
+
+}  // namespace
 
 bool LeafVlessParseUuid(std::string_view cred,
                         std::array<uint8_t, 16>* uuid_bytes) {
@@ -185,18 +203,34 @@ bool LeafVlessStripServerResponse(std::vector<uint8_t>* payload) {
 
 std::string LeafVlessBuildWebSocketUpgradeRequest(std::string_view ws_path,
                                                   std::string_view ws_host,
-                                                  std::string_view sec_ws_key) {
-  return base::StringPrintf(
-      "GET %s HTTP/1.1\r\n"
-      "Host: %s\r\n"
-      "Upgrade: websocket\r\n"
-      "Connection: Upgrade\r\n"
-      "Sec-WebSocket-Key: %s\r\n"
-      "Sec-WebSocket-Version: 13\r\n"
-      "User-Agent: ChromiumLeaf/1.0\r\n"
-      "\r\n",
-      std::string(ws_path).c_str(), std::string(ws_host).c_str(),
-      std::string(sec_ws_key).c_str());
+                                                  std::string_view sec_ws_key,
+                                                  std::string_view user_agent,
+                                                  std::string_view origin) {
+  std::string ua(user_agent);
+  StripHeaderInjection(&ua);
+  if (ua.empty()) {
+    ua.assign(kLeafWsDefaultUserAgent);
+  }
+  std::string orig(origin);
+  StripHeaderInjection(&orig);
+
+  std::string out;
+  out.reserve(256 + ua.size() + orig.size());
+  out.append("GET ").append(ws_path).append(" HTTP/1.1\r\n");
+  out.append("Host: ").append(ws_host).append("\r\n");
+  // Order and anti-cache lines align with Chromium's WebSocket handshake.
+  out.append("Connection: Upgrade\r\n");
+  out.append("Pragma: no-cache\r\n");
+  out.append("Cache-Control: no-cache\r\n");
+  out.append("User-Agent: ").append(ua).append("\r\n");
+  out.append("Upgrade: websocket\r\n");
+  out.append("Sec-WebSocket-Version: 13\r\n");
+  out.append("Sec-WebSocket-Key: ").append(sec_ws_key).append("\r\n");
+  if (!orig.empty()) {
+    out.append("Origin: ").append(orig).append("\r\n");
+  }
+  out.append("\r\n");
+  return out;
 }
 
 }  // namespace net

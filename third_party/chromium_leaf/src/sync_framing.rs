@@ -3,6 +3,7 @@
 // in the LICENSE file.
 
 //! Sync VLESS Vision framing; logic matches upstream Leaf leaf/src/proxy/vless (see submodule).
+#[path = "plain_tcp_header.rs"]
 mod plain_tcp_header;
 
 pub use plain_tcp_header::build_vless_tcp_header_plain;

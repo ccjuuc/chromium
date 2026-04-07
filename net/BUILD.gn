@@ -1013,6 +1013,8 @@ component("net") {
     "socket/chromium_leaf_vless_handshake.h",
     "socket/leaf_client_socket.cc",
     "socket/leaf_client_socket.h",
+    "socket/leaf_vmess_engine.cc",
+    "socket/leaf_vmess_engine.h",
     "socket/leaf_connect_job.cc",
     "socket/leaf_connect_job.h",
     "socket/leaf_outbound_protocol.h",

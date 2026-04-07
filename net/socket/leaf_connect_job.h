@@ -29,7 +29,6 @@ namespace net {
 
 class SocketTag;
 class StreamSocket;
-class TransportSocketParams;
 
 class NET_EXPORT_PRIVATE LeafSocketParams
     : public base::RefCounted<LeafSocketParams> {
@@ -47,8 +46,9 @@ class NET_EXPORT_PRIVATE LeafSocketParams
   LeafSocketParams(const LeafSocketParams&) = delete;
   LeafSocketParams& operator=(const LeafSocketParams&) = delete;
 
-  const scoped_refptr<TransportSocketParams>& transport_params() const {
-    return transport_params_;
+  // Transport to the proxy, optionally wrapped in TLS (`SSLSocketParams`).
+  const ConnectJobParams& nested_proxy_connect_params() const {
+    return nested_proxy_connect_params_;
   }
   const HostPortPair& destination() const { return destination_; }
   const NetworkAnonymizationKey& network_anonymization_key() {
@@ -74,7 +74,7 @@ class NET_EXPORT_PRIVATE LeafSocketParams
   friend class base::RefCounted<LeafSocketParams>;
   ~LeafSocketParams();
 
-  const scoped_refptr<TransportSocketParams> transport_params_;
+  const ConnectJobParams nested_proxy_connect_params_;
   const HostPortPair destination_;
   const NetworkAnonymizationKey network_anonymization_key_;
   NetworkTrafficAnnotationTag traffic_annotation_;

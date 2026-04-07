@@ -5,6 +5,7 @@
 #ifndef NET_BASE_PROXY_STRING_UTIL_H_
 #define NET_BASE_PROXY_STRING_UTIL_H_
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -129,9 +130,23 @@ NET_EXPORT ProxyServer::Scheme GetSchemeFromUriScheme(
     std::string_view scheme,
     bool is_quic_allowed = false);
 
+// Leaf outbound URI query helpers (`vless://...?a=b` / `vmess://...` pieces).
+// `LeafUriQueryLookup` matches the key case-sensitively (as in typical share
+// links). Values are raw URL-encoded substrings (no `%` decoding here).
+NET_EXPORT std::string_view LeafUriQueryLookup(std::string_view leaf_uri_query,
+                                               std::string_view key);
+
+// True when `security` is `tls` or `xtls` (compared case-insensitively),
+// meaning the browser should run TLS to the proxy before the Leaf handshake.
+NET_EXPORT bool LeafOutboundQueryUsesTransportTls(
+    std::string_view leaf_uri_query);
+
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF) && BUILDFLAG(CHROMIUM_LEAF_BUILTIN_DEFAULT_PROXY)
-// Built-in default fixed proxy when |chromium_leaf_builtin_default_proxy| is true.
-NET_EXPORT extern const char kChromiumLeafDefaultProxyUri[];
+// Built-in default proxy URIs (seed prefs / toolbar reset). Index 0 is the
+// default fixed_servers and kChromiumLeafDefaultProxyUri value.
+NET_EXPORT extern const char* const kChromiumLeafDefaultProxyUris[];
+NET_EXPORT extern const size_t kChromiumLeafDefaultProxyUriCount;
+NET_EXPORT extern const char* const kChromiumLeafDefaultProxyUri;
 // Comma-separated host patterns for default prefs: with |reverse_bypass| true,
 // only matching hosts use the fixed proxy; empty = no hosts use VLESS until
 // the user sets |bypass_list| in proxy prefs.

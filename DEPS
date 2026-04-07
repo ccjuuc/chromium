@@ -354,8 +354,9 @@ vars = {
   # and whatever else without interference from each other.
   'lss_revision': '29164a80da4d41134950d76d55199ea33fbb9613',
   # Leaf (Rust proxy framework), checked out to //third_party/leaf for
-  # Chromium-side FFI in //third_party/chromium_leaf. Uses GitHub directly
-  # because chromium.googlesource.com may not mirror this repo.
+  # Chromium-side FFI in //third_party/chromium_leaf. Upstream for Chromium
+  # patches is https://github.com/ccjuuc/leaf (not eycorsican/leaf). Uses
+  # GitHub directly because chromium.googlesource.com may not mirror this repo.
   'leaf_revision': 'a8971524d6e17366e12da0af08f74c2dac672cbd',
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling breakpad
@@ -2335,7 +2336,7 @@ deps = {
 
   # Rust proxy stack (VLESS/VMess/Trojan etc.) for //third_party/chromium_leaf.
   'src/third_party/leaf':
-      'https://github.com/eycorsican/leaf.git@' + Var('leaf_revision'),
+      'https://github.com/ccjuuc/leaf.git@' + Var('leaf_revision'),
 
   'src/third_party/leveldatabase/src':
     Var('chromium_git') + '/external/leveldb.git' + '@' + '4ee78d7ea98330f7d7599c42576ca99e3c6ff9c5',

@@ -24,6 +24,7 @@
 #include "net/net_buildflags.h"
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
 #include "net/socket/chromium_leaf_vless_handshake.h"
+#include "net/socket/leaf_vmess_engine.h"
 #endif
 #include "net/socket/leaf_outbound_protocol.h"
 #include "net/socket/stream_socket.h"
@@ -109,6 +110,15 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
                               int user_buf_len);
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
   void OnVisionTransportRead(int result);
+  void OnVmessTransportRead(scoped_refptr<IOBuffer> user_buf,
+                            int user_buf_len,
+                            int result);
+  void OnVmessTransportWrite(int result);
+  int WriteVmessOutgoing(IOBuffer* buf,
+                         int buf_len,
+                         CompletionOnceCallback callback,
+                         const NetworkTrafficAnnotationTag& traffic_annotation);
+  int FlushVmessCipherWrites(const NetworkTrafficAnnotationTag& traffic_annotation);
 #endif
 
   void OnHandshakeIOComplete(int result);
@@ -166,6 +176,12 @@ class NET_EXPORT_PRIVATE LeafClientSocket : public StreamSocket {
   std::vector<uint8_t> vision_rx_queue_;
   scoped_refptr<IOBuffer> vision_pending_user_buf_;
   int vision_pending_user_len_ = 0;
+  std::unique_ptr<chromium_leaf::LeafVmessStreamEngine> vmess_engine_;
+  std::vector<uint8_t> vmess_rx_plain_;
+  scoped_refptr<IOBuffer> vmess_read_buf_;
+  scoped_refptr<DrainableIOBuffer> vmess_pending_write_buf_;
+  int vmess_pending_user_write_len_ = 0;
+  CompletionOnceCallback vmess_pending_write_callback_;
 #endif
   raw_ptr<char> ws_user_read_dst_ = nullptr;
   int ws_user_read_len_ = 0;

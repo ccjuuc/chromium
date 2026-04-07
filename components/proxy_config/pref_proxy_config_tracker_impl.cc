@@ -18,6 +18,7 @@
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/buildflag.h"
+#include "net/net_buildflags.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/proxy_config/proxy_config_dictionary.h"
@@ -27,7 +28,6 @@
 #include "net/base/proxy_server.h"
 #include "net/base/proxy_string_util.h"
 #include "net/base/url_util.h"
-#include "net/net_buildflags.h"
 #include "net/proxy_resolution/proxy_config.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
@@ -71,6 +71,8 @@ void ApplyChromiumLeafBrowserPrefOverrides(
       proxy_config::prefs::kChromiumLeafProxyHostPatterns);
   if (!patterns.empty()) {
     pc.proxy_rules().bypass_rules.ParseFromString(patterns);
+    // Inverted bypass: only matching hosts use the fixed proxy (e.g. test
+    // *.baidu.com through VMess); all other hosts go direct.
     pc.proxy_rules().reverse_bypass = true;
   }
 
@@ -433,7 +435,7 @@ void ProxyConfigServiceImpl::UpdateProxyConfig(
   net::ProxyConfigWithAnnotation new_config;
   ConfigAvailability availability = GetLatestProxyConfig(&new_config);
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-  LOG(ERROR) << "[LEAF_PROXY_DEBUG] ProxyConfigServiceImpl::UpdateProxyConfig "
+  VLOG(1) << "[LEAF_PROXY_DEBUG] ProxyConfigServiceImpl::UpdateProxyConfig "
              << "incoming_pref_state=" << static_cast<int>(config_state)
              << " availability=" << static_cast<int>(availability)
              << " effective_json=" << new_config.value().ToValue().DebugString();
@@ -485,7 +487,7 @@ PrefProxyConfigTrackerImpl::PrefProxyConfigTrackerImpl(
       proxy_config_service_task_runner_(proxy_config_service_task_runner) {
   pref_config_state_ = ReadPrefConfig(pref_service_, &pref_config_);
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-  LOG(ERROR) << "[LEAF_PROXY_DEBUG] PrefProxyConfigTrackerImpl startup "
+  VLOG(1) << "[LEAF_PROXY_DEBUG] PrefProxyConfigTrackerImpl startup "
                << "pref_config_state=" << static_cast<int>(pref_config_state_)
                << " initial_effective_json="
                << pref_config_.value().ToValue().DebugString();
@@ -564,7 +566,7 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
   if (PrefPrecedes(pref_state)) {
     *effective_config = pref_config;
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-    LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch=PrefPrecedes "
+    VLOG(1) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch=PrefPrecedes "
                << "pref_state=" << static_cast<int>(pref_state);
 #endif
     return net::ProxyConfigService::CONFIG_VALID;
@@ -577,7 +579,7 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
   // system reports a valid config—most traffic would bypass Chromium prefs.
   if (pref_state == ProxyPrefs::CONFIG_FALLBACK) {
     *effective_config = pref_config;
-    LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
+    VLOG(1) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
                     "BuiltinLeafFallbackOverridesSystem "
                  << "system_availability=" << static_cast<int>(system_availability);
     return net::ProxyConfigService::CONFIG_VALID;
@@ -589,14 +591,14 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
     if (pref_state == ProxyPrefs::CONFIG_FALLBACK && !ignore_fallback_config) {
       *effective_config = pref_config;
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-      LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
+      VLOG(1) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
                       "SystemUnset_UsePrefFallback "
                    << "pref_state=" << static_cast<int>(pref_state);
 #endif
     } else {
       *effective_config = net::ProxyConfigWithAnnotation::CreateDirect();
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-      LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
+      VLOG(1) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
                       "SystemUnset_Direct pref_state="
                    << static_cast<int>(pref_state)
                    << " (prefs ignored unless CONFIG_FALLBACK)";
@@ -609,12 +611,11 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
   if (pref_config.value().proxy_override_rules().empty()) {
     *effective_config = system_config;
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-    LOG(ERROR)
-        << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch=UseSystemProxy "
-        << "pref_state_was=" << static_cast<int>(pref_state)
-        << " — fixed_servers prefs are IGNORED when OS reports a system "
-           "proxy; PrefPrecedes must be true (policy/extension) or OS proxy "
-           "must be unset.";
+    VLOG(1) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch=UseSystemProxy "
+            << "pref_state_was=" << static_cast<int>(pref_state)
+            << " — fixed_servers prefs are IGNORED when OS reports a system "
+               "proxy; PrefPrecedes must be true (policy/extension) or OS "
+               "proxy must be unset.";
 #endif
   } else {
     net::ProxyConfig new_config = system_config.value();
@@ -623,7 +624,7 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
     *effective_config = net::ProxyConfigWithAnnotation(
         new_config, system_config.traffic_annotation());
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-    LOG(ERROR) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
+    VLOG(1) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch="
                     "SystemPlusOverrideRules";
 #endif
   }
@@ -698,7 +699,7 @@ ProxyPrefs::ConfigState PrefProxyConfigTrackerImpl::ReadPrefConfig(
       pref_service->GetDict(proxy_config::prefs::kProxy);
   ProxyConfigDictionary proxy_dict(dict.Clone());
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-  LOG(ERROR) << "[LEAF_PROXY_DEBUG] ReadPrefConfig raw prefs::kProxy dict="
+  VLOG(1) << "[LEAF_PROXY_DEBUG] ReadPrefConfig raw prefs::kProxy dict="
              << dict.DebugString();
 #endif
 
@@ -724,7 +725,7 @@ ProxyPrefs::ConfigState PrefProxyConfigTrackerImpl::ReadPrefConfig(
   }
 
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-  LOG(ERROR) << "[LEAF_PROXY_DEBUG] ReadPrefConfig result state="
+  VLOG(1) << "[LEAF_PROXY_DEBUG] ReadPrefConfig result state="
              << static_cast<int>(state) << " net_config_json="
              << config->value().ToValue().DebugString();
 #endif
@@ -849,7 +850,7 @@ bool PrefProxyConfigTrackerImpl::PrefConfigToNetConfig(
         proxy_config.proxy_rules().reverse_bypass = reverse_bypass;
       }
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-      LOG(ERROR) << "[LEAF_PROXY_DEBUG] PrefConfigToNetConfig MODE_FIXED_SERVERS "
+      VLOG(1) << "[LEAF_PROXY_DEBUG] PrefConfigToNetConfig MODE_FIXED_SERVERS "
                    << "server_len=" << proxy_server.size()
                    << " bypass_list=\"" << proxy_bypass << "\""
                    << " reverse_bypass=" << proxy_config.proxy_rules().reverse_bypass

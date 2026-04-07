@@ -849,10 +849,10 @@ int HttpStreamFactory::JobController::DoResolveProxyComplete(int rv) {
     const bool non_direct =
         !proxy_info_.is_empty() && !proxy_info_.proxy_chain().is_direct();
     if (non_direct) {
-      LOG(ERROR) << "[LEAF_PROXY_DEBUG] HttpStreamJobController proxy "
-                      "resolved url="
-                 << request_info_.url.spec() << " chain="
-                 << proxy_info_.proxy_chain().ToDebugString();
+      VLOG(1) << "[LEAF_PROXY_DEBUG] HttpStreamJobController proxy "
+                 "resolved url="
+              << request_info_.url.spec()
+              << " chain=" << proxy_info_.proxy_chain().ToDebugString();
     }
   }
 #endif

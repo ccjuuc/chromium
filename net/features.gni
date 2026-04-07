@@ -74,9 +74,10 @@ declare_args() {
   enable_chromium_leaf = true
 
   # When true (and enable_chromium_leaf), the default profile/local-state proxy
-  # pref is fixed_servers with kChromiumLeafDefaultProxyUri and reverse_bypass:
-  # only hosts in kChromiumLeafDefaultProxyHostPatterns (or user bypass_list)
-  # use VLESS; other traffic is direct. Set false for "system proxy" default.
+  # pref is fixed_servers with kChromiumLeafDefaultProxyUris[0] (see
+  # kChromiumLeafDefaultProxyUri) and reverse_bypass: only hosts in
+  # kChromiumLeafDefaultProxyHostPatterns use the proxy; other traffic is direct.
+  # Set false for "system proxy" default.
   chromium_leaf_builtin_default_proxy = true
 
   # The SQL disk cache backend is an experimental feature (crbug.com/422065015).

@@ -67,9 +67,14 @@ bool LeafVlessHttpResponseFirstLineIs101(const std::string& headers);
 bool LeafVlessStripServerResponse(std::vector<uint8_t>* payload);
 
 // GET request for RFC6455 WebSocket upgrade (caller supplies Sec-WebSocket-Key).
-std::string LeafVlessBuildWebSocketUpgradeRequest(std::string_view ws_path,
-                                                  std::string_view ws_host,
-                                                  std::string_view sec_ws_key);
+// Empty |user_agent| selects a browser-like default. Empty |origin| omits Origin.
+// Proxy URI may include useragent=/origin= query keys (Xray streamSettings.headers).
+std::string LeafVlessBuildWebSocketUpgradeRequest(
+    std::string_view ws_path,
+    std::string_view ws_host,
+    std::string_view sec_ws_key,
+    std::string_view user_agent,
+    std::string_view origin);
 
 }  // namespace net
 

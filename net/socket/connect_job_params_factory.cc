@@ -5,6 +5,7 @@
 #include "net/socket/connect_job_params_factory.h"
 
 #include <optional>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -261,6 +262,54 @@ ConnectJobParams CreateProxyParams(
         common_connect_job_params, proxy_dns_network_anonymization_key);
   }
 
+#if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+  // VMess/VLESS "security=tls" / WSS: TLS must run on the bytes to the proxy
+  // before the WebSocket upgrade inside LeafClientSocket.
+  if (proxy_server.is_leaf_outbound() &&
+      LeafOutboundQueryUsesTransportTls(proxy_server.leaf_uri_query())) {
+    SSLConfig leaf_proxy_tls_config;
+    leaf_proxy_tls_config.disable_cert_verification_network_fetches = true;
+
+    HostPortPair leaf_tls_host_port = proxy_server.host_port_pair();
+    std::string_view sni =
+        LeafUriQueryLookup(proxy_server.leaf_uri_query(), "sni");
+    if (!sni.empty()) {
+      leaf_tls_host_port.set_host(std::string(sni));
+    }
+
+    // WebSocket upgrade is HTTP/1.1. If we advertise h2 and the server picks
+    // it, sending an HTTP/1.1 Upgrade on the TLS stream fails and the peer
+    // closes with ERR_CONNECTION_CLOSED.
+    const std::string_view leaf_transport_type =
+        LeafUriQueryLookup(proxy_server.leaf_uri_query(), "type");
+    const ConnectJobFactory::AlpnMode leaf_proxy_alpn_mode =
+        base::EqualsCaseInsensitiveASCII(leaf_transport_type, "ws")
+            ? ConnectJobFactory::AlpnMode::kHttp11Only
+            : ConnectJobFactory::AlpnMode::kHttpAll;
+
+    VLOG(1) << "[LEAF_PROXY_DEBUG] Leaf transport TLS to proxy "
+            << leaf_tls_host_port.ToString()
+            << " alpn_mode="
+            << (leaf_proxy_alpn_mode == ConnectJobFactory::AlpnMode::kHttp11Only
+                    ? "http11_only"
+                    : "http_all")
+            << " uri_type=" << leaf_transport_type;
+
+    ConfigureAlpn(
+        url::SchemeHostPort(url::kHttpsScheme, leaf_tls_host_port.host(),
+                            leaf_tls_host_port.port()),
+        leaf_proxy_alpn_mode, network_anonymization_key,
+        *common_connect_job_params, leaf_proxy_tls_config,
+        /*renego_allowed=*/false);
+    leaf_proxy_tls_config.proxy_chain = proxy_chain;
+    leaf_proxy_tls_config.proxy_chain_index = proxy_chain_index;
+    leaf_proxy_tls_config.session_usage = SessionUsage::kProxy;
+    params = MakeSSLSocketParams(std::move(params), leaf_tls_host_port,
+                                 leaf_proxy_tls_config,
+                                 network_anonymization_key);
+  }
+#endif  // BUILDFLAG(ENABLE_CHROMIUM_LEAF)
+
   // For secure connections, wrap the underlying connection params in SSL
   // params.
   if (proxy_server.is_secure_http_like()) {
@@ -289,12 +338,11 @@ ConnectJobParams CreateProxyParams(
     DCHECK(proxy_server.is_leaf_outbound());
     DCHECK_EQ(1u, proxy_chain.length());
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
-    LOG(ERROR) << "[LEAF_PROXY_DEBUG] CreateProxyParams Leaf outbound "
-                 << "dest=" << ToHostPortPair(endpoint).ToString()
-                 << " proxy=" << ProxyServerToProxyUri(proxy_server)
-                 << " protocol="
-                 << static_cast<int>(proxy_server.scheme())
-                 << " chain=" << proxy_chain.ToDebugString();
+    VLOG(1) << "[LEAF_PROXY_DEBUG] CreateProxyParams Leaf outbound "
+            << "dest=" << ToHostPortPair(endpoint).ToString()
+            << " proxy=" << ProxyServerToProxyUri(proxy_server)
+            << " protocol=" << static_cast<int>(proxy_server.scheme())
+            << " chain=" << proxy_chain.ToDebugString();
 #endif
     params = ConnectJobParams(base::MakeRefCounted<LeafSocketParams>(
         std::move(params), ToHostPortPair(endpoint), network_anonymization_key,
