@@ -334,6 +334,7 @@
 #include "xenon_overlay/buildflags/buildflags.h"
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
 #include "xenon_overlay/chrome/browser/xenon_browser_main_extra_parts.h"
+#include "xenon_overlay/chrome/browser/xenon_login_controller.h"
 #endif
 
 namespace {
@@ -493,6 +494,15 @@ void ProcessSingletonNotificationCallbackImpl(
   // browser process. This also removes the switch after use to prevent any side
   // effects of leaving it in the command line after this point.
   base::nix::ExtractXdgActivationTokenFromCmdLine(command_line);
+#endif
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (xenon::XenonLoginController::GetInstance()->HandleSecondProcessDuringLogin()) {
+    if constexpr (kShouldRecordActiveUse) {
+      GoogleUpdateSettings::SetLastRunTime();
+    }
+    return;
+  }
 #endif
 
   StartupProfilePathInfo startup_profile_path_info =

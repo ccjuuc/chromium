@@ -17,8 +17,9 @@ namespace xenon {
 
 namespace {
 
-// Must match //xenon_overlay/chrome/browser/ui/webui: XenonWebUIController kHost.
+// Must match xenon_webui_controller.h host constants.
 constexpr char kXenonOverlayWebUIHost[] = "xenon-overlay";
+constexpr char kXenonLoginWebUIHost[] = "xenon-login";
 
 }  // namespace
 
@@ -44,9 +45,10 @@ bool XenonRenderFrameObserver::IsPageUrlEligibleForApi(
   if (url.SchemeIsHTTPOrHTTPS() || url.SchemeIs("chrome-extension")) {
     return true;
   }
-  // Trusted Xenon WebUI (chrome://xenon-overlay/) — same surface as ShowXenonOverlay.
+  // Trusted Xenon WebUIs (overlay + login gate).
   if (url.SchemeIs(content::kChromeUIScheme) &&
-      url.host() == kXenonOverlayWebUIHost) {
+      (url.host() == kXenonOverlayWebUIHost ||
+       url.host() == kXenonLoginWebUIHost)) {
     return true;
   }
   return false;

@@ -49,6 +49,7 @@ source_set("startup") {
       "startup_browser_creator_impl.h",
       "startup_tab_provider.h",
       "startup_types.h",
+      "xenon_login_startup_hooks.h",
     ]
     public_deps += [
       ":startup_tab",
@@ -95,6 +96,15 @@ source_set("startup") {
       "//google_apis",
     ]
   }
+}
+
+source_set("xenon_login_startup_hooks") {
+  sources = [ "xenon_login_startup_hooks.cc" ]
+  deps = [
+    ":startup",
+    "//base",
+    "//chrome/browser/profiles:profile",
+  ]
 }
 
 source_set("impl") {
@@ -165,6 +175,7 @@ source_set("impl") {
     ]
     deps += [
       ":startup_tab",
+      ":xenon_login_startup_hooks",
       "//apps",
       "//base:i18n",
       "//build:branding_buildflags",

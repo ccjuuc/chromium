@@ -8,6 +8,7 @@
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
+#include "xenon_overlay/chrome/browser/xenon_login_controller.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 
 namespace xenon {
@@ -241,6 +242,18 @@ void XenonPageHandler::OpenComponentExtensionDialog(
       "Opened extension WebDialog (chrome-extension://…/index.html). "
       "Use popup buttons or DevTools → Extensions → service worker for "
       "chrome.xenonPrivate.ping.");
+}
+
+void XenonPageHandler::SetAppSessionLoggedIn(bool logged_in) {
+  if (!web_ui_) {
+    return;
+  }
+  Profile* profile = Profile::FromWebUI(web_ui_);
+  if (!profile) {
+    return;
+  }
+  XenonLoginController::GetInstance()->SetAppSessionLoggedIn(profile,
+                                                              logged_in);
 }
 
 }  // namespace xenon

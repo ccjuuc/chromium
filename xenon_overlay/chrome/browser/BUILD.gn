@@ -1,6 +1,17 @@
 import("//third_party/skia/modules/svg/svg.gni")
 import("//xenon_overlay/buildflags/features.gni")
 
+source_set("xenon_prefs") {
+  sources = [
+    "xenon_prefs.cc",
+    "xenon_prefs.h",
+  ]
+  deps = [
+    "//components/pref_registry",
+    "//components/prefs",
+  ]
+}
+
 source_set("xenon_common_bubble") {
   sources = [
     "ui/xenon_common_bubble.cc",
@@ -22,6 +33,8 @@ source_set("xenon_common_bubble") {
 source_set("browser") {
   defines = []
   sources = [
+    "xenon_login_controller.cc",
+    "xenon_login_controller.h",
     "xenon_data_mask_to_main_host_impl.cc",
     "xenon_data_mask_to_main_host_impl.h",
     "xenon_frame_interface_binder.cc",
@@ -30,6 +43,8 @@ source_set("browser") {
     "xenon_page_host_impl.h",
     "xenon_browser_main_extra_parts.cc",
     "xenon_browser_main_extra_parts.h",
+    "xenon_login_startup_registration.cc",
+    "xenon_login_startup_registration.h",
     "xenon_extension_manager.cc",
     "xenon_extension_manager.h",
     "xenon_manager.cc",
@@ -67,7 +82,11 @@ source_set("browser") {
 
   deps = [
     "//base",
+    ":xenon_prefs",
+    "//chrome/browser/lifetime:termination_notification",
     "//chrome/browser:browser_process",
+    "//chrome/browser/ui/startup:startup",
+    "//chrome/browser/ui/startup:xenon_login_startup_hooks",
     "//chrome/browser/ui:ui",
     "//content/public/browser",
     "//ui/compositor",

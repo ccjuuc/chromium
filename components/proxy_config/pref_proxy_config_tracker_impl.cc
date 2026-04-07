@@ -40,7 +40,9 @@ void ApplyChromiumLeafBrowserPrefOverrides(
     const PrefService* pref_service,
     net::ProxyConfigWithAnnotation* config) {
   DCHECK(pref_service);
-  net::ProxyConfig& pc = config->value();
+  const net::NetworkTrafficAnnotationTag traffic_annotation =
+      config->traffic_annotation();
+  net::ProxyConfig pc = config->value();
   if (pc.proxy_rules().type != net::ProxyConfig::ProxyRules::Type::PROXY_LIST) {
     return;
   }
@@ -71,6 +73,8 @@ void ApplyChromiumLeafBrowserPrefOverrides(
     pc.proxy_rules().bypass_rules.ParseFromString(patterns);
     pc.proxy_rules().reverse_bypass = true;
   }
+
+  *config = net::ProxyConfigWithAnnotation(pc, traffic_annotation);
 }
 #endif  // ENABLE_CHROMIUM_LEAF
 

@@ -94,6 +94,10 @@
 #include "chrome/browser/updates/announcement_notification/announcement_notification_service.h"
 #include "chrome/browser/webauthn/webauthn_pref_names.h"
 #include "chrome/common/buildflags.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/xenon_prefs.h"
+#endif
 #include "chrome/common/pref_names.h"
 #include "chrome/common/secure_origin_allowlist.h"
 #include "components/autofill/core/common/autofill_prefs.h"
@@ -1736,6 +1740,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   visited_url_ranking::GroupSuggestionsServiceImpl::RegisterProfilePrefs(
       registry);
   wallet::prefs::RegisterProfilePrefs(registry);
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::prefs::RegisterProfilePrefs(registry);
+#endif
   omnibox::RegisterProfilePrefs(registry);
   ZeroSuggestProvider::RegisterProfilePrefs(registry);
   NtpCustomBackgroundService::RegisterProfilePrefs(registry);

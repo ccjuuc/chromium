@@ -29,4 +29,8 @@ interface PageHandler {
   // without --show-xenon-extension). Interact with the extension there; e.g.
   // chrome.xenonPrivate.ping in the service worker (see background.js).
   OpenComponentExtensionDialog() => (bool success, string message);
+
+  // Application session gate: when false, startup stays on login WebUI; call
+  // with true after successful login. false shows relogin UI (see prefs).
+  SetAppSessionLoggedIn(bool logged_in);
 };

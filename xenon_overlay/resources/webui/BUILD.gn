@@ -6,6 +6,8 @@ build_webui("resources") {
   static_files = [
     "index.css",
     "index.html",
+    "login/login.css",
+    "login/login.html",
   ]
 
   ts_files = [ "index.ts" ]

@@ -94,6 +94,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/switches.h"
 #include "printing/buildflags/buildflags.h"
+#include "chrome/browser/ui/startup/xenon_login_startup_hooks.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
@@ -838,6 +839,12 @@ void StartupBrowserCreator::LaunchBrowser(
       command_line, {profile, StartupProfileMode::kBrowserWindow});
 
   if (!IsSilentLaunchEnabled(command_line, profile)) {
+    if (xenon_login_startup_hooks::MaybeDeferSingleBrowserLaunch(
+            this, command_line, profile, cur_dir, process_startup,
+            is_first_run, restore_tabbed_browser)) {
+      in_synchronous_profile_launch_ = false;
+      return;
+    }
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
     auto* fre_service = FirstRunServiceFactory::GetForBrowserContext(profile);
     if (fre_service && fre_service->ShouldOpenFirstRun()) {
@@ -872,6 +879,12 @@ void StartupBrowserCreator::LaunchBrowserForLastProfiles(
     bool restore_tabbed_browser) {
   TRACE_EVENT0("ui", "StartupBrowserCreator::LaunchBrowserForLastProfiles");
   DCHECK_NE(profile_info.mode, StartupProfileMode::kError);
+
+  if (xenon_login_startup_hooks::MaybeDeferLaunchBrowserForLastProfiles(
+          this, command_line, cur_dir, process_startup, is_first_run,
+          profile_info, last_opened_profiles, restore_tabbed_browser)) {
+    return;
+  }
 
   Profile* profile = profile_info.profile;
   // On Windows, when chrome is launched by notification activation where the

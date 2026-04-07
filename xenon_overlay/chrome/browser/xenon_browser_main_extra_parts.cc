@@ -1,5 +1,8 @@
 #include "xenon_overlay/chrome/browser/xenon_browser_main_extra_parts.h"
 
+#include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/xenon_login_startup_registration.h"
+
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -43,6 +46,10 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
     return;
   }
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::RegisterXenonLoginStartupHooks();
+#endif
+
   LOG(INFO) << "XenonBrowserMainExtraParts: Initializing XenonManager for profile: " 
             << profile->GetDebugName();
 
@@ -65,6 +72,9 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::XenonWebUIConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonWebUIConfig";
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::XenonLoginWebUIConfig>());
+  LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonLoginWebUIConfig";
 
   // Register Simple WebUI Config (without Mojo)
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(

@@ -32,6 +32,7 @@ class XenonPageHandler : public mojom::PageHandler {
   void TestDataMask(TestDataMaskCallback callback) override;
   void OpenComponentExtensionDialog(
       OpenComponentExtensionDialogCallback callback) override;
+  void SetAppSessionLoggedIn(bool logged_in) override;
 
  private:
   mojo::Receiver<mojom::PageHandler> receiver_;

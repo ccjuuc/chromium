@@ -1,0 +1,21 @@
+#ifndef XENON_OVERLAY_CHROME_BROWSER_XENON_PREFS_H_
+#define XENON_OVERLAY_CHROME_BROWSER_XENON_PREFS_H_
+
+namespace user_prefs {
+class PrefRegistrySyncable;
+}  // namespace user_prefs
+
+namespace xenon::prefs {
+
+// Session flag: main browser windows open only when true (after WebUI login).
+inline constexpr char kAppSessionLoggedIn[] = "xenon.app_session_logged_in";
+
+// 0 = standalone login window, 1 = hide all browser windows during relogin,
+// 2 = modal dialog on last active browser window.
+inline constexpr char kReloginPresentation[] = "xenon.relogin_presentation";
+
+void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+
+}  // namespace xenon::prefs
+
+#endif  // XENON_OVERLAY_CHROME_BROWSER_XENON_PREFS_H_

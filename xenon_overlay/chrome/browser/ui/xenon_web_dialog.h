@@ -1,9 +1,16 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_UI_XENON_WEB_DIALOG_H_
 #define XENON_OVERLAY_CHROME_BROWSER_UI_XENON_WEB_DIALOG_H_
 
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
 #include "url/gurl.h"
+
+namespace views {
+class Widget;
+}  // namespace views
 
 namespace content {
 class BrowserContext;
@@ -31,6 +38,18 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                    int height,
                    const std::u16string& title);
 
+  // Login / modal: optional parent, modal type, widget output, close callback.
+  static void ShowForLogin(content::BrowserContext* context,
+                           const GURL& url,
+                           int width,
+                           int height,
+                           const std::u16string& title,
+                           raw_ptr<views::Widget>* out_widget,
+                           gfx::NativeView parent,
+                           ui::mojom::ModalType modal_type,
+                           base::OnceClosure on_dialog_closed,
+                           bool show_close_button = true);
+
   // `--show-xenon-extension`: register Xenon WebUI Mojo and open chrome://xenon-overlay/.
   // Remote / observer checks run from the WebUI page (split Mojo tests).
   static void ShowXenonOverlay(Profile* profile);
@@ -38,6 +57,9 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   // Single source of truth for the WebUI URL shown by ShowXenonOverlay(). The WebUI
   // page exercises `window.xenon` (XenonPageHost) in resources/webui/index.ts.
   static GURL GetXenonOverlayWebUIUrl();
+
+  // Login gate WebUI (`chrome://xenon-login/`)：独立 login HTML/CSS/JS，`chrome.send`。
+  static GURL GetXenonLoginWebUIUrl();
 
   // test entry for Data Mask (网页打码).
   static void ShowDataMaskTest(Profile* profile);
@@ -51,7 +73,10 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   XenonWebDialog(const GURL& url,
                  int width,
                  int height,
-                 const std::u16string& title);
+                 const std::u16string& title,
+                 ui::mojom::ModalType modal_type,
+                 base::OnceClosure on_dialog_closed,
+                 bool show_close_button);
   ~XenonWebDialog() override;
 
   // ui::WebDialogDelegate:
@@ -73,6 +98,9 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   int width_;
   int height_;
   std::u16string title_;
+  ui::mojom::ModalType modal_type_ = ui::mojom::ModalType::kNone;
+  base::OnceClosure on_dialog_closed_;
+  bool show_close_button_ = false;
 };
 
 }  // namespace xenon

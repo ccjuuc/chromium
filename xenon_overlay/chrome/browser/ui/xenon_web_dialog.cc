@@ -1,6 +1,8 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/gfx/native_ui_types.h"
 #include "base/logging.h"
 #include "chrome/browser/profiles/profile.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
@@ -130,7 +132,25 @@ void XenonWebDialog::Show(content::BrowserContext* context,
                           int width,
                           int height,
                           const std::u16string& title) {
-  auto* delegate = new XenonWebDialog(url, width, height, title);
+  ShowForLogin(context, url, width, height, title, /*out_widget=*/nullptr,
+               gfx::NativeView(), ui::mojom::ModalType::kNone,
+               base::OnceClosure(), /*show_close_button=*/false);
+}
+
+// static
+void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
+                                    const GURL& url,
+                                    int width,
+                                    int height,
+                                    const std::u16string& title,
+                                    raw_ptr<views::Widget>* out_widget,
+                                    gfx::NativeView parent,
+                                    ui::mojom::ModalType modal_type,
+                                    base::OnceClosure on_dialog_closed,
+                                    bool show_close_button) {
+  auto* delegate =
+      new XenonWebDialog(url, width, height, title, modal_type,
+                         std::move(on_dialog_closed), show_close_button);
 
   views::Widget* widget = new views::Widget;
   views::Widget::InitParams params(
@@ -140,14 +160,23 @@ void XenonWebDialog::Show(content::BrowserContext* context,
       context, delegate, std::make_unique<ChromeWebContentsHandler>());
   params.remove_standard_frame = true;
   params.type = views::Widget::InitParams::TYPE_WINDOW;
+  params.parent = parent;
 
   widget->Init(std::move(params));
   widget->Show();
+  if (out_widget) {
+    *out_widget = widget;
+  }
 }
 
 // static
 GURL XenonWebDialog::GetXenonOverlayWebUIUrl() {
   return GURL("chrome://xenon-overlay/");
+}
+
+// static
+GURL XenonWebDialog::GetXenonLoginWebUIUrl() {
+  return GURL("chrome://xenon-login/");
 }
 
 // static
@@ -183,13 +212,22 @@ void XenonWebDialog::OpenComponentExtensionWindow(Profile* profile) {
 XenonWebDialog::XenonWebDialog(const GURL& url,
                                int width,
                                int height,
-                               const std::u16string& title)
-    : url_(url), width_(width), height_(height), title_(title) {}
+                               const std::u16string& title,
+                               ui::mojom::ModalType modal_type,
+                               base::OnceClosure on_dialog_closed,
+                               bool show_close_button)
+    : url_(url),
+      width_(width),
+      height_(height),
+      title_(title),
+      modal_type_(modal_type),
+      on_dialog_closed_(std::move(on_dialog_closed)),
+      show_close_button_(show_close_button) {}
 
 XenonWebDialog::~XenonWebDialog() = default;
 
 ui::mojom::ModalType XenonWebDialog::GetDialogModalType() const {
-  return ui::mojom::ModalType::kNone;
+  return modal_type_;
 }
 
 std::u16string XenonWebDialog::GetDialogTitle() const {
@@ -212,6 +250,9 @@ std::string XenonWebDialog::GetDialogArgs() const {
 }
 
 void XenonWebDialog::OnDialogClosed(const std::string& json_retval) {
+  if (on_dialog_closed_) {
+    std::move(on_dialog_closed_).Run();
+  }
   delete this;
 }
 
@@ -227,7 +268,7 @@ bool XenonWebDialog::ShouldShowDialogTitle() const {
 }
 
 bool XenonWebDialog::ShouldShowCloseButton() const {
-  return false;
+  return show_close_button_;
 }
 
 ui::WebDialogDelegate::FrameKind XenonWebDialog::GetWebDialogFrameKind() const {

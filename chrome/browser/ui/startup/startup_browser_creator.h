@@ -86,6 +86,9 @@ class StartupBrowserCreator {
   // Invalid URLs (per `GURL::is_valid()`) are skipped.
   void AddFirstRunTabs(const std::vector<GURL>& urls);
 
+  // First-run URLs for the next launch (copied when Xenon login defers startup).
+  const std::vector<GURL>& first_run_tabs() const { return first_run_tabs_; }
+
   // This function is equivalent to ProcessCommandLine but should only be
   // called during actual process startup.
   bool Start(const base::CommandLine& cmd_line,
