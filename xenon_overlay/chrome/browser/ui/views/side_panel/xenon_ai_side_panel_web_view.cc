@@ -43,6 +43,15 @@ XenonAiSidePanelWebView::XenonAiSidePanelWebView(
 
 XenonAiSidePanelWebView::~XenonAiSidePanelWebView() = default;
 
+bool XenonAiSidePanelWebView::HandleContextMenu(
+    content::RenderFrameHost& /*render_frame_host*/,
+    const content::ContextMenuParams& /*params*/) {
+  // WebUIContentsWrapper::Host default implementation ignores context menus.
+  // Returning false here allows the wrapped WebContents to show its default
+  // context menu (including DevTools actions).
+  return false;
+}
+
 BEGIN_METADATA(XenonAiSidePanelWebView)
 END_METADATA
 

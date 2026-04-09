@@ -1,7 +1,10 @@
 import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("mojo_bindings") {
-  sources = [ "xenon.mojom" ]
+  sources = [
+    "xenon.mojom",
+    "xenon_ai.mojom",
+  ]
   public_deps = [ "//mojo/public/mojom/base" ]
   webui_module_path = "/"
 }

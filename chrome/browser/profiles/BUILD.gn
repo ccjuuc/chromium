@@ -367,7 +367,10 @@ source_set("profiles_extra_parts_impl") {
   ]
 
   if (enable_xenon_ai) {
-    deps += [ "//xenon_overlay/chrome/browser/xenon_ai:xenon_ai" ]
+    deps += [
+      "//xenon_overlay/chrome/browser/xenon_ai:xenon_ai",
+      "//xenon_overlay/chrome/browser/xenon_ai:xenon_ai_context_menu",
+    ]
   }
 
   public_deps = [

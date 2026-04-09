@@ -9,6 +9,12 @@
 
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_config.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_ai.mojom.h"
+#include "xenon_overlay/chrome/browser/xenon_ai/xenon_ai_service.h"
 
 namespace content {
 class Page;
@@ -30,12 +36,23 @@ class XenonAiSidePanelUIConfig
   bool IsPreloadable() override;
 };
 
-class XenonAiSidePanelUI : public TopChromeWebUIController {
+class XenonAiSidePanelUI : public TopChromeWebUIController,
+                           public mojom::XenonAiPageHandler,
+                           public XenonAiService::Observer {
  public:
   explicit XenonAiSidePanelUI(content::WebUI* web_ui);
   XenonAiSidePanelUI(const XenonAiSidePanelUI&) = delete;
   XenonAiSidePanelUI& operator=(const XenonAiSidePanelUI&) = delete;
   ~XenonAiSidePanelUI() override;
+
+  // mojom::XenonAiPageHandler:
+  void SetPage(mojo::PendingRemote<mojom::XenonAiPage> page) override;
+  void GetInitialPrompt(GetInitialPromptCallback callback) override;
+
+  // XenonAiService::Observer:
+  void OnPromptReceived(const std::string& prompt) override;
+
+  void BindInterface(mojo::PendingReceiver<mojom::XenonAiPageHandler> receiver);
 
   // Side-panel WebContents wait for `embedder()->ShowUI()` before showing
   // (see ReadingListPageHandler::ShowUI()). Call when the primary page exists.
@@ -46,6 +63,10 @@ class XenonAiSidePanelUI : public TopChromeWebUIController {
   }
 
   WEB_UI_CONTROLLER_TYPE_DECL();
+
+ private:
+  mojo::Receiver<mojom::XenonAiPageHandler> receiver_{this};
+  mojo::Remote<mojom::XenonAiPage> page_;
 };
 
 }  // namespace xenon

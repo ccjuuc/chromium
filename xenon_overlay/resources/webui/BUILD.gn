@@ -18,6 +18,7 @@ build_webui("resources") {
 
   mojo_files = [
     "$root_gen_dir/xenon_overlay/chrome/browser/ui/webui/xenon.mojom-webui.ts",
+    "$root_gen_dir/xenon_overlay/chrome/browser/ui/webui/xenon_ai.mojom-webui.ts",
   ]
 
   mojo_files_deps = [

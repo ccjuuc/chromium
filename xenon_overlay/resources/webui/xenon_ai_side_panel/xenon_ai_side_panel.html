@@ -4,13 +4,75 @@
   <meta charset="utf-8">
   <title>Xenon AI</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 16px; color: #202124; }
-    h1 { font-size: 1.1rem; margin: 0 0 8px; }
-    p { margin: 0; font-size: 0.9rem; color: #5f6368; }
+    body { 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+      margin: 0; 
+      padding: 16px;
+      color: #202124; 
+      background: #ffffff;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    h1 { font-size: 1.1rem; margin: 0; color: #1a73e8; }
+    #container { 
+      flex: 1;
+      display: flex; 
+      flex-direction: column; 
+      gap: 12px; 
+    }
+    .card { 
+      border: 1px solid #dadce0; 
+      border-radius: 8px; 
+      padding: 12px; 
+      background: #f8f9fa;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+    .prompt-label { 
+      font-weight: bold; 
+      font-size: 0.75rem; 
+      color: #70757a; 
+      text-transform: uppercase;
+      margin-bottom: 6px; 
+      letter-spacing: 0.5px;
+    }
+    #prompt-text { 
+      font-size: 0.95rem; 
+      line-height: 1.5;
+      white-space: pre-wrap; 
+      word-break: break-word; 
+      color: #3c4043;
+    }
+    .status {
+      margin-top: auto;
+      font-size: 0.75rem;
+      color: #9aa0a6;
+      text-align: center;
+      padding-top: 12px;
+      border-top: 1px solid #f1f3f4;
+    }
   </style>
 </head>
 <body>
-  <h1>Xenon AI</h1>
-  <p>Side panel shell. Domain logic lives in Browser <code>XenonAiService</code>; add Mojo here when the UI needs it.</p>
+  <div id="container">
+    <header>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="#1a73e8">
+        <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71L12 2z"/>
+      </svg>
+      <h1>Xenon AI</h1>
+    </header>
+    <div class="card">
+      <div class="prompt-label">Current Prompt</div>
+      <div id="prompt-text">Select text on a page and use the context menu to interact with Xenon AI.</div>
+    </div>
+    <div class="status">Connected to Xenon AI Service</div>
+  </div>
+  <script type="module" src="xenon_ai_side_panel.js"></script>
 </body>
 </html>

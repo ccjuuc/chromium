@@ -10,6 +10,8 @@
 #include "base/functional/callback_forward.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
+#include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/render_frame_host.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 
 class Profile;
@@ -37,6 +39,10 @@ class XenonAiSidePanelWebView : public SidePanelWebUIViewT<XenonAiSidePanelUI> {
   XenonAiSidePanelWebView(const XenonAiSidePanelWebView&) = delete;
   XenonAiSidePanelWebView& operator=(const XenonAiSidePanelWebView&) = delete;
   ~XenonAiSidePanelWebView() override;
+
+  // WebUIContentsWrapper::Host:
+  bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
+                         const content::ContextMenuParams& params) override;
 
  private:
   XenonAiSidePanelWebView(

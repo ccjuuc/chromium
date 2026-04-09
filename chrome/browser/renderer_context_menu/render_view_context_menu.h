@@ -45,6 +45,9 @@
 #include "chrome/browser/extensions/menu_manager.h"
 #endif
 
+#include "xenon_overlay/buildflags/buildflags.h"
+
+
 class AccessibilityLabelsMenuObserver;
 class Browser;
 #if BUILDFLAG(ENABLE_COMPOSE)
@@ -63,6 +66,13 @@ namespace content {
 class RenderFrameHost;
 class WebContents;
 }  // namespace content
+
+#if BUILDFLAG(ENABLE_XENON_AI)
+namespace xenon {
+class XenonAiContextMenuObserver;
+}
+#endif
+
 
 namespace extensions {
 class Extension;
@@ -538,7 +548,13 @@ class RenderViewContextMenu
 
   std::unique_ptr<LinkToTextMenuObserver> link_to_text_menu_observer_;
 
+#if BUILDFLAG(ENABLE_XENON_AI)
+  std::unique_ptr<xenon::XenonAiContextMenuObserver>
+      xenon_ai_context_menu_observer_;
+#endif
+
   // In the case of a MimeHandlerView this will point to the WebContents that
+
   // embeds the MimeHandlerViewGuest. Otherwise this will be the same as
   // |source_web_contents_|.
   const raw_ptr<content::WebContents, DanglingUntriaged> embedder_web_contents_;

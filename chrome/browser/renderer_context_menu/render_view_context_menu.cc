@@ -71,6 +71,11 @@
 #include "chrome/browser/renderer_context_menu/accessibility_labels_menu_observer.h"
 #include "chrome/browser/renderer_context_menu/context_menu_content_type_factory.h"
 #include "chrome/browser/renderer_context_menu/link_to_text_menu_observer.h"
+
+#if BUILDFLAG(ENABLE_XENON_AI)
+#include "xenon_overlay/chrome/browser/xenon_ai/xenon_ai_context_menu_observer.h"
+#endif
+
 #include "chrome/browser/renderer_context_menu/spelling_menu_observer.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
@@ -1080,6 +1085,16 @@ bool RenderViewContextMenu::IsInProgressiveWebApp() const {
 
 void RenderViewContextMenu::InitMenu() {
   RenderViewContextMenuBase::InitMenu();
+
+#if BUILDFLAG(ENABLE_XENON_AI)
+  if (!xenon_ai_context_menu_observer_) {
+    xenon_ai_context_menu_observer_ =
+        std::make_unique<xenon::XenonAiContextMenuObserver>(
+            this, source_web_contents_, params_);
+    observers_.AddObserver(xenon_ai_context_menu_observer_.get());
+  }
+  xenon_ai_context_menu_observer_->InitMenu(params_);
+#endif
 
   AppendPasswordItems();
 

@@ -1,7 +1,8 @@
 # Xenon AI 集成参考（独立文档）
 
 **端到端流程、Webium 时序、Brave Leo/Local AI 逐步对照**（细粒度、按调用链展开）见同目录 [**`xenon_ai_brave_components_reference.md`**](./xenon_ai_brave_components_reference.md)。  
-**KeyedService / ProfileKeyedServiceFactory 详解与 Xenon AI 示例** 见 [**`keyed_service_guide.md`**](./keyed_service_guide.md)。
+**KeyedService / ProfileKeyedServiceFactory 详解与 Xenon AI 示例** 见 [**`keyed_service_guide.md`**](./keyed_service_guide.md)。  
+**侧栏 WebUI + 网页右键菜单 + Mojo 传参（本轮变更说明）** 见 [**`xenon_ai_side_panel_context_menu_changelog.md`**](./xenon_ai_side_panel_context_menu_changelog.md)。
 
 本文 **仅讨论 AI / 侧栏 / 对话与本地嵌入**，与 Xenon 其它能力（Utility Mojo、`XenonWebDialog`、提醒等）解耦。实现时请优先遵守文中的 **分层边界**，避免把重逻辑塞进 `window.xenon` 或扩展 API。
 
@@ -296,5 +297,37 @@ if (base::FeatureList::IsEnabled(history_embeddings::kHistoryEmbeddings)) {
 侧栏全局注册与工具栏动作均在 **`#if BUILDFLAG(ENABLE_XENON_AI)`** 下；`chrome/browser/ui/BUILD.gn` 在 `enable_xenon_ai` 时增加对 **`//xenon_overlay/resources:resources_grit`** 的依赖，以解析 **`IDS_XENON_AI_SIDE_PANEL_TASK_MANAGER_TITLE`**。
 
 ---
+
+## 9. 附录 D：网页右键菜单与在页改写 (Context Menu & Rewrite in-place)
+
+Brave Leo 通过扩展 Chromium 的 `RenderViewContextMenu` 来提供「改写」、「总结」、「改变语气」等右键能力，并支持在可编辑区域直接以流式输出替换原文本（Rewrite in-place）。
+
+### D.1. 右键菜单展现
+- **挂载点**：在 `BraveRenderViewContextMenu::BuildAIChatMenu()` 中追加 `IDC_AI_CHAT_CONTEXT_SUMMARIZE_TEXT` 等命令。
+- **条件**：`!params_.selection_text.empty() && IsAIChatEnabled(...)`。若是改写命令（Rewrite/Change Tone），还需判定 `params_.is_editable` 用以支持原地应用。
+
+### D.2. 执行命令与动作分发
+- 根据 `command_id` 获取 `action_type` 与选中文本 `selected_text`。
+- 如果条件满足 **原地改写（Rewrite in-place）**（可编辑、SSE 开启、改写指令等），不呼出侧栏，而是通过 `ai_engine_->GenerateRewriteSuggestion` 发起流式推理。
+- **否则（侧栏分流）**：通过 `ConversationHandler::SubmitSelectedText` 发送给侧栏组件，同时触发 `OpenAIChatForTab` 将结果展示在侧栏里。
+
+### D.3. 原地改写的流式更新机制 (OnRewriteSuggestionDataReceived)
+- 向 `source_web_contents_` 挂载 `AIChatRewriteData` UserData 用于累加流式文本。
+- **动态替换逻辑**：
+  ```cpp
+  if (!rewrite_data->accumulated_text.empty()) {
+    web_contents->Undo(); // 撤销上一次的半成品内容
+  }
+  base::StrAppend(&rewrite_data->accumulated_text, {suggestion});
+  web_contents->Replace(base::UTF8ToUTF16(rewrite_data->accumulated_text)); // 覆盖输入框选中区域
+  ```
+- **错误倒退**：若后续收到 API Error，使用相同逻辑回调 `Undo()` 还原用户原始文本，然后自动弹开侧边栏提示对话框报错。
+
+### D.4. 在 XenonAI 的实现方案建议
+由于 Xenon overlay 不建议生硬 patch `render_view_context_menu.cc`，推荐通过标准的 **`RenderViewContextMenuObserver`**：
+1. 实现 `XenonAiContextMenuObserver : public RenderViewContextMenuObserver`。
+2. 注入菜单事件入口。
+3. `ExecuteCommand` 内调用 `XenonAiService` 拉取回复。
+4. 参照 Brave 维护一套基于 `Undo` / `Replace` 的注入态管理。
 
 *Brave 路径已在 `F:\brave_browser\src` 检出下核对；行号与符号随上游提交可能变化，以本地 `git grep` 为准。*

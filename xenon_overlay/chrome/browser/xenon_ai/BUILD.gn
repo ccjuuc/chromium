@@ -5,6 +5,9 @@
 import("//xenon_overlay/buildflags/features.gni")
 
 if (enable_xenon_ai) {
+  # Core service + WebUI + factory registration. Must NOT depend on
+  # //chrome/browser/ui/views/side_panel — that target already depends on
+  # xenon_ai (webview/registration), which would create a GN cycle.
   source_set("xenon_ai") {
     sources = [
       "browser_context_keyed_service_factories.cc",
@@ -24,10 +27,31 @@ if (enable_xenon_ai) {
       "//chrome/common",
       "//components/keyed_service/core",
       "//content/public/browser",
+      "//mojo/public/cpp/bindings",
       "//xenon_overlay/buildflags",
+      "//xenon_overlay/chrome/browser/ui/webui:mojo_bindings",
       "//xenon_overlay/resources:resources_grit",
     ]
 
     public_deps = [ "//chrome/browser/profiles:profile" ]
+  }
+
+  # Context menu → SidePanelCoordinator; depends on side_panel, which depends
+  # on xenon_ai core — order is acyclic.
+  source_set("xenon_ai_context_menu") {
+    sources = [
+      "xenon_ai_context_menu_observer.cc",
+      "xenon_ai_context_menu_observer.h",
+    ]
+    deps = [
+      ":xenon_ai",
+      "//base",
+      "//chrome/app:command_ids",
+      "//chrome/browser/profiles",
+      "//chrome/browser/ui",
+      "//chrome/browser/ui/views/side_panel",
+      "//components/renderer_context_menu:renderer_context_menu",
+      "//content/public/browser",
+    ]
   }
 }
