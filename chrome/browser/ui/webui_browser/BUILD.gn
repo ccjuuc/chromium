@@ -99,6 +99,7 @@ source_set("impl") {
     "//components/sharing_message",
     "//content/public/browser",
     "//ui/base",
+    "//xenon_overlay/buildflags",
     "//ui/content_accelerators",
     "//ui/views",
     "//ui/views/controls/webview",

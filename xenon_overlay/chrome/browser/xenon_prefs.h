@@ -14,6 +14,12 @@ inline constexpr char kAppSessionLoggedIn[] = "xenon.app_session_logged_in";
 // 2 = modal dialog on last active browser window.
 inline constexpr char kReloginPresentation[] = "xenon.relogin_presentation";
 
+// One-shot: default-pin Xenon AI side panel action to the toolbar (Chromium
+// side panels are opened via pinned toolbar actions; there is no separate icon
+// until something is pinned).
+inline constexpr char kAiSidePanelToolbarPinMigrated[] =
+    "xenon.ai_side_panel_toolbar_pin_migrated";
+
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
 }  // namespace xenon::prefs

@@ -55,7 +55,7 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   static void ShowXenonOverlay(Profile* profile);
 
   // Single source of truth for the WebUI URL shown by ShowXenonOverlay(). The WebUI
-  // page exercises `window.xenon` (XenonPageHost) in resources/webui/index.ts.
+  // page exercises `window.xenon` (XenonPageHost) in resources/webui/xenon/index.ts.
   static GURL GetXenonOverlayWebUIUrl();
 
   // Login gate WebUI (`chrome://xenon-login/`)：独立 login HTML/CSS/JS，`chrome.send`。

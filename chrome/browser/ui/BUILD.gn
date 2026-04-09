@@ -27,6 +27,7 @@ import("//third_party/protobuf/proto_library.gni")
 import("//tools/metrics/generate_allowlist_from_histograms_file.gni")
 import("//ui/base/ui_features.gni")
 import("//ui/views/features.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 assert(enable_supervised_users)
 assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
@@ -663,7 +664,12 @@ static_library("ui") {
     "//ui/strings",
     "//ui/webui",
     "//v8:v8_version",
+    "//xenon_overlay/buildflags",
   ]
+
+  if (enable_xenon_ai) {
+    deps += [ "//xenon_overlay/resources:resources_grit" ]
+  }
 
   allow_circular_includes_from = []
 

@@ -34,6 +34,7 @@ enum ActionId {
   kTabSearch,
   kSplitTab,
   kContextualTasks,
+  kShowXenonAI,
 };
 
 // Unique identifiers for categories the actions can belong to.

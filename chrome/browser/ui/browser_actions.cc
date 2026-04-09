@@ -119,6 +119,11 @@
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 
+#include "xenon_overlay/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_XENON_AI)
+#include "xenon_overlay/resources/grit/xenon_resources.h"
+#endif
+
 #if !BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h"
 #endif
@@ -259,7 +264,16 @@ void BrowserActions::InitializeBrowserActions() {
                               IDS_MERCHANT_TRUST_SIDE_PANEL_TITLE,
                               IDS_MERCHANT_TRUST_SIDE_PANEL_TITLE,
                               vector_icons::kStorefrontIcon,
-                              kActionSidePanelShowMerchantTrust, bwi, false))
+                              kActionSidePanelShowMerchantTrust, bwi, false)
+#if BUILDFLAG(ENABLE_XENON_AI)
+                  ,
+              SidePanelAction(SidePanelEntryId::kXenonAI,
+                              IDS_XENON_AI_SIDE_PANEL_TASK_MANAGER_TITLE,
+                              IDS_XENON_AI_SIDE_PANEL_TASK_MANAGER_TITLE,
+                              omnibox::kSearchSparkIcon,
+                              kActionSidePanelShowXenonAI, bwi, true)
+#endif
+                  )
           .Build());
 
   if (side_panel::history_clusters::

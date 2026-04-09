@@ -245,6 +245,10 @@
 #include "chrome/browser/webauthn/immediate_request_rate_limiter_factory.h"
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/browser/webid/federated_identity_api_permission_context_factory.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_XENON_SERVICE) && BUILDFLAG(ENABLE_XENON_AI)
+#include "xenon_overlay/chrome/browser/xenon_ai/browser_context_keyed_service_factories.h"
+#endif
 #include "chrome/browser/webid/federated_identity_auto_reauthn_permission_context_factory.h"
 #include "chrome/browser/webid/federated_identity_permission_context_factory.h"
 #include "chrome/common/buildflags.h"
@@ -1434,6 +1438,9 @@ void ChromeBrowserMainExtraPartsProfiles::
   if (base::FeatureList::IsEnabled(syncer::kWebApkBackupAndRestoreBackend)) {
     webapk::WebApkSyncServiceFactory::GetInstance();
   }
+#endif
+#if BUILDFLAG(ENABLE_XENON_SERVICE) && BUILDFLAG(ENABLE_XENON_AI)
+  xenon::EnsureXenonBrowserContextKeyedServiceFactoriesBuilt();
 #endif
   WebDataServiceFactory::GetInstance();
   webrtc_event_logging::WebRtcEventLogManagerKeyedServiceFactory::GetInstance();

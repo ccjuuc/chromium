@@ -1,6 +1,8 @@
-# Xenon Overlay 面试备忘（架构与 Mojo）
+# Xenon Overlay 架构与实现参考
 
-面向 **`feature/xenon-overlay`** 相关实现，便于口述架构、trade-off 与 Chromium 机制。文末保留提交列表与生成说明。
+面向 **`feature/xenon-overlay`**：Browser / Utility **Mojo**、**WebUI**、**组件扩展** 与 **`chrome.xenonPrivate`**、**`XenonWebDialog`**、提醒与 Bubble UI、资源与 **Buildflags** 等。由口述备忘整理，文末保留提交列表与生成说明。
+
+> 单点 API 说明见同目录 [`chrome_xenon_private_api.md`](./chrome_xenon_private_api.md)（`window.xenon` / Broker 见 [`xenon_page_api_browser_interface_broker.md`](./xenon_page_api_browser_interface_broker.md)）。**AI 分层与附录索引** 见 [`xenon_ai_integration.md`](./xenon_ai_integration.md)；**流程导向的 Brave Leo/Local AI 与 Xenon 对照** 见 [`xenon_ai_brave_components_reference.md`](./xenon_ai_brave_components_reference.md)。
 
 ---
 
@@ -11,8 +13,10 @@
 3. [**专题：三种 Mojo 客户端 `Remote` / `SharedRemote` / `AssociatedRemote`**](#3-专题三种-mojo-客户端remote--sharedremote--associatedremote)  
    · [3.6 三种 Browser↔Utility 路径归纳（主接口 / Associated / Observer）](#36-三种-browserutility-路径归纳主接口--associated--observer)
 4. [Mojo 服务：`XenonMainService` 全链路](#4-mojo-服务xenonmainservice-全链路)
-5. [WebUI](#5-webui)
+5. [WebUI](#5-webui)  
+   · [AI 集成与分层](./xenon_ai_integration.md) · [流程：Brave 组件与 Xenon 对照](./xenon_ai_brave_components_reference.md)
 6. [内置扩展（Component Extension）](#6-内置扩展component-extension)  
+   · [独立文档：`chrome.xenonPrivate` 用法与接入](./chrome_xenon_private_api.md)  
    · [6.5 扩展与 Browser 原生对接的可选路径](#65-扩展与-browser-原生对接的可选路径)  
    · [6.6 添加自定义 Extension API 的详细步骤](#66-添加自定义-extension-api-的详细步骤)  
    · [6.7 示例：`chrome.xenonPrivate` 涉及文件](#67-示例chromexenonprivate-涉及文件)

@@ -91,6 +91,7 @@ chromium-metrics-reviews@google.com.
   <variant name=".TabSearch"/>
   <variant name=".UserEducation"/>
   <variant name=".UserNotesSidePanel"/>
+  <variant name=".XenonAiSidePanel"/>
 </variants>
 
 <!-- LINT.ThenChange(//tools/metrics/histograms/metadata/page/histograms.xml:TopChromeWebUIName) -->
@@ -114,6 +115,7 @@ chromium-metrics-reviews@google.com.
   <variant name="TabSearch"/>
   <variant name="Theme"/>
   <variant name="TopChrome"/>
+  <variant name="XenonAiSidePanel"/>
 </variants>
 
 <!-- LINT.ThenChange(//tools/metrics/histograms/metadata/others/histograms.xml:WebUIHostnameForCodeCache) -->

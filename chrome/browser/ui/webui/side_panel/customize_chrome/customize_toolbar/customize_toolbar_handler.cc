@@ -34,6 +34,9 @@
 #include "ui/display/screen.h"
 #include "ui/gfx/vector_icon_types.h"
 
+#include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/ui/customize_chrome/xenon_ai_customize_toolbar_bridges.h"
+
 namespace {
 std::optional<side_panel::customize_chrome::mojom::ActionId>
 MojoActionForChromeAction(actions::ActionId action_id) {
@@ -92,6 +95,10 @@ MojoActionForChromeAction(actions::ActionId action_id) {
       return side_panel::customize_chrome::mojom::ActionId::kSplitTab;
     case kActionSidePanelShowContextualTasks:
       return side_panel::customize_chrome::mojom::ActionId::kContextualTasks;
+#if BUILDFLAG(ENABLE_XENON_AI)
+    case kActionSidePanelShowXenonAI:
+      return side_panel::customize_chrome::mojom::ActionId::kShowXenonAI;
+#endif
     default:
       return std::nullopt;
   }
@@ -152,6 +159,10 @@ std::optional<actions::ActionId> ChromeActionForMojoAction(
       return kActionSplitTab;
     case side_panel::customize_chrome::mojom::ActionId::kContextualTasks:
       return kActionSidePanelShowContextualTasks;
+#if BUILDFLAG(ENABLE_XENON_AI)
+    case side_panel::customize_chrome::mojom::ActionId::kShowXenonAI:
+      return kActionSidePanelShowXenonAI;
+#endif
     default:
       return std::nullopt;
   }
@@ -359,6 +370,7 @@ void CustomizeToolbarHandler::ListActions(ListActionsCallback callback) {
              side_panel::customize_chrome::mojom::CategoryId::kTools);
   add_action(kActionSidePanelShowSearchCompanion,
              side_panel::customize_chrome::mojom::CategoryId::kTools);
+  xenon::AppendXenonAiCustomizeToolbarListActions(add_action);
   add_action(kActionShowTranslate,
              side_panel::customize_chrome::mojom::CategoryId::kTools);
   add_action(kActionQrCodeGenerator,

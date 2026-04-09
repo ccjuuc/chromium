@@ -9,11 +9,17 @@
             type="data_package" lang="en" />
   </outputs>
   <release seq="1">
+    <messages>
+      <message name="IDS_XENON_AI_SIDE_PANEL_TASK_MANAGER_TITLE"
+          desc="Task manager title for Xenon AI side panel WebContents">
+        Xenon AI
+      </message>
+    </messages>
     <includes>
-      <include name="IDR_XENON_WEBUI_INDEX_HTML" file="webui/index.html" type="BINDATA" />
-      <include name="IDR_XENON_WEBUI_INDEX_CSS" file="webui/index.css" type="BINDATA" />
-      <include name="IDR_XENON_WEBUI_INDEX_JS" file="${root_gen_dir}/xenon_overlay/resources/webui/tsc/index.js" use_base_dir="false" type="BINDATA" />
-      <include name="IDR_XENON_WEBUI_XENON_MOJOM_WEBUI_JS" file="${root_gen_dir}/xenon_overlay/resources/webui/tsc/xenon.mojom-webui.js" use_base_dir="false" type="BINDATA" />
+      <include name="IDR_XENON_WEBUI_INDEX_HTML" file="webui/xenon/index.html" type="BINDATA" />
+      <include name="IDR_XENON_WEBUI_INDEX_CSS" file="webui/xenon/index.css" type="BINDATA" />
+      <include name="IDR_XENON_WEBUI_INDEX_JS" file="${root_gen_dir}/xenon_overlay/resources/webui/tsc/xenon/index.js" use_base_dir="false" type="BINDATA" />
+      <include name="IDR_XENON_WEBUI_XENON_MOJOM_WEBUI_JS" file="${root_gen_dir}/xenon_overlay/resources/webui/tsc/xenon/xenon.mojom-webui.js" use_base_dir="false" type="BINDATA" />
 
       <!-- chrome://xenon-login/ — standalone HTML/CSS/JS（chrome.send，无 Mojo） -->
       <include name="IDR_XENON_LOGIN_HTML" file="webui/login/login.html" type="BINDATA" />
@@ -21,9 +27,11 @@
       <include name="IDR_XENON_LOGIN_JS" file="webui/login/login.js" type="BINDATA" />
 
       <!-- Simple WebUI Resources (no Mojo) -->
-      <include name="IDR_SIMPLE_WEBUI_INDEX_HTML" file="simple_webui/index.html" type="BINDATA" />
-      <include name="IDR_SIMPLE_WEBUI_INDEX_CSS" file="simple_webui/index.css" type="BINDATA" />
-      <include name="IDR_SIMPLE_WEBUI_INDEX_JS" file="simple_webui/index.js" type="BINDATA" />
+      <include name="IDR_SIMPLE_WEBUI_INDEX_HTML" file="webui/simple_webui/index.html" type="BINDATA" />
+      <include name="IDR_SIMPLE_WEBUI_INDEX_CSS" file="webui/simple_webui/index.css" type="BINDATA" />
+      <include name="IDR_SIMPLE_WEBUI_INDEX_JS" file="webui/simple_webui/index.js" type="BINDATA" />
+
+      <include name="IDR_XENON_AI_SIDE_PANEL_HTML" file="webui/xenon_ai_side_panel/xenon_ai_side_panel.html" type="BINDATA" />
     </includes>
   </release>
 </grit>

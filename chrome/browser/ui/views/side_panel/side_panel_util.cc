@@ -34,6 +34,11 @@
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/actions/actions.h"
 
+#include "xenon_overlay/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_XENON_AI)
+#include "xenon_overlay/chrome/browser/ui/views/side_panel/xenon_ai_side_panel_registration.h"
+#endif
+
 #if BUILDFLAG(ENABLE_GLIC)
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/ui/views/side_panel/glic/glic_legacy_side_panel_coordinator.h"
@@ -81,6 +86,12 @@ void SidePanelUtil::PopulateGlobalEntries(Browser* browser,
   browser->browser_window_features()
       ->bookmarks_side_panel_coordinator()
       ->CreateAndRegisterEntry(window_registry);
+
+#if BUILDFLAG(ENABLE_XENON_AI)
+  // Before the WebUI-browser early return: kWebium can be on while this window
+  // still uses SidePanelCoordinator; the entry must exist in the registry.
+  xenon::RegisterXenonAiGlobalSidePanelEntry(browser, window_registry);
+#endif
 
   if (webui_browser::IsWebUIBrowserEnabled()) {
     // TODO(webium): Consider supporting additional side panels beyond reading

@@ -12,5 +12,6 @@ buildflag_header("buildflags") {
     "ENABLE_XENON_MANAGER_SHARED_REMOTE=$enable_xenon_manager_shared_remote",
     "ENABLE_XENON_ASSOCIATED_SIDE=$enable_xenon_associated_side",
     "ENABLE_XENON_BROWSER_OBSERVER=$enable_xenon_browser_observer",
+    "ENABLE_XENON_AI=$enable_xenon_ai",
   ]
 }

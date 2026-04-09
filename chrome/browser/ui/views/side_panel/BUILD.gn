@@ -6,6 +6,7 @@ assert(is_win || is_mac || is_linux || is_chromeos)
 
 import("//chrome/common/features.gni")
 import("//extensions/buildflags/buildflags.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 source_set("side_panel_enums") {
   sources = [ "side_panel_enums.h" ]
@@ -94,6 +95,14 @@ source_set("side_panel") {
       "glic/glic_legacy_side_panel_coordinator.h",
       "glic/glic_side_panel_coordinator_impl.cc",
       "glic/glic_side_panel_coordinator_impl.h",
+    ]
+  }
+  if (enable_xenon_ai) {
+    sources += [
+      "//xenon_overlay/chrome/browser/ui/views/side_panel/xenon_ai_side_panel_registration.cc",
+      "//xenon_overlay/chrome/browser/ui/views/side_panel/xenon_ai_side_panel_registration.h",
+      "//xenon_overlay/chrome/browser/ui/views/side_panel/xenon_ai_side_panel_web_view.cc",
+      "//xenon_overlay/chrome/browser/ui/views/side_panel/xenon_ai_side_panel_web_view.h",
     ]
   }
   public_deps = [
@@ -202,6 +211,7 @@ source_set("side_panel") {
     "//ui/gfx:color_utils",
     "//ui/gfx/geometry:geometry_skia",
     "//ui/webui",
+    "//xenon_overlay/buildflags",
   ]
 
   if (enable_extensions) {
@@ -214,6 +224,13 @@ source_set("side_panel") {
 
   if (enable_glic) {
     deps += [ "//chrome/browser/glic" ]
+  }
+
+  if (enable_xenon_ai) {
+    deps += [
+      "//xenon_overlay/chrome/browser/xenon_ai:xenon_ai",
+      "//xenon_overlay/resources:resources_grit",
+    ]
   }
 
   allow_circular_includes_from = [

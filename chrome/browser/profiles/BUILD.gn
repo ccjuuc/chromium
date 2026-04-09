@@ -9,6 +9,7 @@ import("//components/enterprise/buildflags/buildflags.gni")
 import("//components/on_device_translation/buildflags/features.gni")
 import("//components/signin/features.gni")
 import("//extensions/buildflags/buildflags.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 # This target should be the default place for adding public interface things
 # (ie, non-factory, non-impl). There will likely need to be a :factory or :impl
@@ -362,7 +363,12 @@ source_set("profiles_extra_parts_impl") {
     "//components/sync/base:features",
     "//media",
     "//services/network/public/cpp",
+    "//xenon_overlay/buildflags",
   ]
+
+  if (enable_xenon_ai) {
+    deps += [ "//xenon_overlay/chrome/browser/xenon_ai:xenon_ai" ]
+  }
 
   public_deps = [
     "//chrome/browser:browser_public_dependencies",

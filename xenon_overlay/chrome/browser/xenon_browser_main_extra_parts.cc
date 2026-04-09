@@ -24,6 +24,35 @@
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 
+#if BUILDFLAG(ENABLE_XENON_AI)
+#include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
+#include "components/prefs/pref_service.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_ai/xenon_ai_side_panel_ui.h"
+#include "xenon_overlay/chrome/browser/xenon_prefs.h"
+#endif
+
+namespace {
+
+#if BUILDFLAG(ENABLE_XENON_AI)
+// Chromium shows side panels via pinned toolbar actions; with an empty pin list
+// there is no visible launcher. Pin Xenon AI once per regular profile.
+void MaybePinXenonAiToolbarAction(Profile* profile) {
+  if (!profile || !profile->IsRegularProfile()) {
+    return;
+  }
+  PrefService* prefs = profile->GetPrefs();
+  if (prefs->GetBoolean(xenon::prefs::kAiSidePanelToolbarPinMigrated)) {
+    return;
+  }
+  PinnedToolbarActionsModel::Get(profile)->UpdatePinnedState(
+      kActionSidePanelShowXenonAI, true);
+  prefs->SetBoolean(xenon::prefs::kAiSidePanelToolbarPinMigrated, true);
+}
+#endif
+
+}  // namespace
+
 XenonBrowserMainExtraParts::XenonBrowserMainExtraParts() = default;
 
 XenonBrowserMainExtraParts::~XenonBrowserMainExtraParts() {
@@ -42,6 +71,10 @@ void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
 
 void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
                                                  bool is_initial_profile) {
+#if BUILDFLAG(ENABLE_XENON_AI)
+  MaybePinXenonAiToolbarAction(profile);
+#endif
+
   if (!is_initial_profile) {
     return;
   }
@@ -80,6 +113,12 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::SimpleWebUIConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered SimpleWebUIConfig";
+
+#if BUILDFLAG(ENABLE_XENON_AI)
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::XenonAiSidePanelUIConfig>());
+  LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonAiSidePanelUIConfig";
+#endif
 
   xenon::XenonManager::GetInstance()->EnsureServiceStarted(profile);
 

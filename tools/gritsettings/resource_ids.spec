@@ -789,8 +789,9 @@
     "includes": [5350],
   },
   "xenon_overlay/resources/xenon_resources.grd": {
-    "META": {"sizes": {"includes": [50]}},
+    "META": {"sizes": {"includes": [50], "messages": [20]}},
     "includes": [5400],
+    "messages": [5450],
   },
   # END chrome/ WebUI resources section
 

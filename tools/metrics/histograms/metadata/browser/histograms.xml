@@ -75,6 +75,7 @@ chromium-metrics-reviews@google.com.
   <variant name="SideSearch" summary="side search"/>
   <variant name="UserNotes" summary="user notes"/>
   <variant name="WebView" summary="web view"/>
+  <variant name="XenonAI" summary="xenon ai side panel"/>
 </variants>
 
 <variants name="SidePanelType">

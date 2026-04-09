@@ -2,6 +2,8 @@
 
 本文整理 **feature/xenon-overlay** 中「页面 JS ↔ 浏览器进程」这条链路的实现细节，重点说明 **`BrowserInterfaceBroker` 的用法与原理**，并与 **Brave 钱包** 的同类模式对照，便于口述设计与排障。
 
+**AI / 侧栏 / `KeyedService` 分层** 与 **`window.xenon` 应保持薄封装** 的约定，见独立文档 [**`xenon_ai_integration.md`**](./xenon_ai_integration.md)（本文不展开对话、SSE、侧栏注册）。
+
 ---
 
 ## 1. 要解决什么问题
@@ -81,7 +83,7 @@
 | 项 | 说明 |
 |----|------|
 | **`XenonWebDialog::GetXenonOverlayWebUIUrl()`** | `chrome://xenon-overlay/` 单一来源；`ShowXenonOverlay` 使用同一 URL。 |
-| **`resources/webui/index.ts`** | 按钮调用 `window.xenon.ping()` / `getApiVersion()` 做页面侧自测。 |
+| **`resources/webui/xenon/index.ts`** | 按钮调用 `window.xenon.ping()` / `getApiVersion()` 做页面侧自测。 |
 | **注入白名单** | `XenonRenderFrameObserver::IsPageUrlEligibleForApi` 除 `https?`、`chrome-extension` 外，增加 **`chrome` scheme + host `xenon-overlay`**，与 WebUI host 一致。 |
 
 ---
@@ -254,7 +256,7 @@
 **挂载与引用**：
 
 - `XenonWebUIController`：`WebUIDataSource::AddResourcePath("xenon.mojom-webui.js", IDR_XENON_WEBUI_XENON_MOJOM_WEBUI_JS)`。
-- `resources/webui/index.ts`：`import { PageHandler } from './xenon.mojom-webui.js'`，`const handler = PageHandler.getRemote()` — 与 C++ 侧 **`WebUIBrowserInterfaceBrokerRegistry` + `BindInterface`** closure。
+- `resources/webui/xenon/index.ts`：`import { PageHandler } from './xenon.mojom-webui.js'`，`const handler = PageHandler.getRemote()` — 与 C++ 侧 **`WebUIBrowserInterfaceBrokerRegistry` + `BindInterface`** closure。
 
 ### 10.5 速记：该改哪份文件
 

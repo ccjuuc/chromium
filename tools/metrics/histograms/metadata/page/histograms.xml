@@ -512,6 +512,7 @@ chromium-metrics-reviews@google.com.
   <variant name=".TabSearch"/>
   <variant name=".UserEducation"/>
   <variant name=".UserNotesSidePanel"/>
+  <variant name=".XenonAiSidePanel"/>
 </variants>
 
 <!-- LINT.ThenChange(//tools/metrics/histograms/metadata/ui/histograms.xml:TopChromeWebUIName) -->

@@ -7,6 +7,7 @@ namespace xenon::prefs {
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(kAppSessionLoggedIn, false);
   registry->RegisterIntegerPref(kReloginPresentation, 0);
+  registry->RegisterBooleanPref(kAiSidePanelToolbarPinMigrated, false);
 }
 
 }  // namespace xenon::prefs

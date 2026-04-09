@@ -17,6 +17,7 @@
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 namespace {
 
@@ -57,7 +58,11 @@ void WebUIBrowserSidePanelUI::Close(SidePanelEntry::PanelType panel_type,
 }
 
 void WebUIBrowserSidePanelUI::Toggle(SidePanelEntryKey key,
-                                     SidePanelOpenTrigger open_trigger) {}
+                                     SidePanelOpenTrigger open_trigger) {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/ui/webui_browser/webui_browser_side_panel_toggle.inc"
+#endif
+}
 
 content::WebContents* WebUIBrowserSidePanelUI::GetWebContentsForTest(
     SidePanelEntryId id) {

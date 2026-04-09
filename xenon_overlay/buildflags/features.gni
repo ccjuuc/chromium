@@ -17,3 +17,9 @@ declare_args() {
   # Utility→Browser XenonBrowserObserver + SetBrowserObserver registration.
   enable_xenon_browser_observer = true
 }
+
+# Second block: defaults may reference args from the block above (GN forbids same-block refs).
+declare_args() {
+  # Xenon AI: Profile KeyedService + chrome://xenon-ai-side-panel WebUI + Side Panel entry.
+  enable_xenon_ai = enable_xenon_service
+}
