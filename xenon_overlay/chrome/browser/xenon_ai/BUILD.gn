@@ -14,6 +14,8 @@ if (enable_xenon_ai) {
       "browser_context_keyed_service_factories.h",
       "../ui/webui/xenon_ai/xenon_ai_side_panel_ui.cc",
       "../ui/webui/xenon_ai/xenon_ai_side_panel_ui.h",
+      "xenon_ai_inference_client.cc",
+      "xenon_ai_inference_client.h",
       "xenon_ai_service.cc",
       "xenon_ai_service.h",
       "xenon_ai_service_factory.cc",

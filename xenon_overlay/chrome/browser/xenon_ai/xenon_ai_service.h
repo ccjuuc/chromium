@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
@@ -41,6 +42,14 @@ class XenonAiService : public KeyedService {
   // Set the prompt that should be picked up by the side panel UI.
   void SetPendingPrompt(const std::string& prompt);
   std::string GetPendingPrompt() const;
+
+  // Runs `xenon_ai_inferencer_burn` off-thread; |callback| is always posted to the
+  // browser UI thread. On failure, |success| is false and |text| holds an error
+  // string.
+  void RunInferencerRewriteAsync(
+      const std::string& instruction_utf8,
+      const std::string& selection_utf8,
+      base::OnceCallback<void(bool success, const std::string& text)> callback);
 
  private:
   const base::raw_ptr<Profile> profile_;

@@ -1,0 +1,34 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//xenon_overlay/buildflags/features.gni")
+
+# Builds the Burn + Llama sidecar with Cargo and copies it to $root_out_dir.
+# Requires `cargo` on PATH (e.g. rustup). First build may download crates + HF
+# weights at runtime (not during ninja).
+if (enable_xenon_ai && build_xenon_ai_inferencer_burn) {
+  action("xenon_ai_inferencer_burn") {
+    script = "//xenon_overlay/xenon_ai_inferencer_burn/build_inferencer_burn.py"
+
+    inputs = [
+      "//xenon_overlay/xenon_ai_inferencer_burn/build_inferencer_burn.py",
+      "//xenon_overlay/xenon_ai_inferencer_burn/Cargo.toml",
+      "//xenon_overlay/xenon_ai_inferencer_burn/Cargo.lock",
+      "//xenon_overlay/xenon_ai_inferencer_burn/src/main.rs",
+    ]
+
+    if (is_win) {
+      outputs = [ "$root_out_dir/xenon_ai_inferencer_burn.exe" ]
+    } else {
+      outputs = [ "$root_out_dir/xenon_ai_inferencer_burn" ]
+    }
+
+    args = [
+      "--crate-root",
+      rebase_path("//xenon_overlay/xenon_ai_inferencer_burn", root_build_dir),
+      "--out-dir",
+      rebase_path("$root_out_dir", root_build_dir),
+    ]
+  }
+}

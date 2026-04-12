@@ -31,6 +31,7 @@ import("//tools/resources/generate_resource_allowlist.gni")
 import("//tools/v8_context_snapshot/v8_context_snapshot.gni")
 import("//ui/gl/features.gni")
 import("//v8/gni/v8.gni")
+import("//xenon_overlay/buildflags/features.gni")
 
 assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
 
@@ -374,6 +375,11 @@ if (!is_android && !is_mac) {
       "//components/privacy_sandbox/privacy_sandbox_attestations/preload:component",
       "//third_party/widevine/cdm",
     ]
+
+    if (enable_xenon_ai && build_xenon_ai_inferencer_burn) {
+      data_deps +=
+          [ "//xenon_overlay/xenon_ai_inferencer_burn:xenon_ai_inferencer_burn" ]
+    }
 
     if (is_linux) {
       sources += [

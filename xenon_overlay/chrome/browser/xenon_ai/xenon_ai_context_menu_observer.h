@@ -10,7 +10,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
-#include "base/memory/weak_ptr.h"
 #include "components/renderer_context_menu/render_view_context_menu_observer.h"
 #include "ui/menus/simple_menu_model.h"
 
@@ -54,11 +53,6 @@ class XenonAiContextMenuObserver : public RenderViewContextMenuObserver,
   // Whether Xenon AI context menu features are enabled in settings and profile.
   bool IsXenonAiEnabled() const;
 
-  // Handlers for the streaming response of in-place rewrite operations.
-  void OnRewriteSuggestionDataReceived(const std::string& suggestion_delta);
-  void OnRewriteSuggestionCompleted(const std::string& selected_text,
-                                   bool success);
-
   base::raw_ptr<RenderViewContextMenuProxy> proxy_;
   base::raw_ptr<content::WebContents> web_contents_;
   const base::raw_ref<const content::ContextMenuParams> params_;
@@ -66,8 +60,6 @@ class XenonAiContextMenuObserver : public RenderViewContextMenuObserver,
   // Submenu models
   ui::SimpleMenuModel ai_quick_actions_submenu_;
   ui::SimpleMenuModel ai_change_tone_submenu_;
-
-  base::WeakPtrFactory<XenonAiContextMenuObserver> weak_ptr_factory_{this};
 };
 
 }  // namespace xenon

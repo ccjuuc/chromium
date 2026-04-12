@@ -4,6 +4,9 @@
 
 #include "xenon_overlay/chrome/browser/xenon_ai/xenon_ai_context_menu_observer.h"
 
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/supports_user_data.h"
@@ -34,6 +37,46 @@ constexpr char kXenonAiRewriteDataKey[] = "xenon_ai_rewrite_data";
 struct XenonAiRewriteData : public base::SupportsUserData::Data {
   std::string accumulated_text;
 };
+
+// The context menu (and this observer) are destroyed when the menu closes.
+// Inference is async, so completion must not use WeakPtr<XenonAiContextMenuObserver>.
+void ApplyInferencerRewriteOnWebContents(content::WebContents* web_contents,
+                                         bool success,
+                                         const std::string& text) {
+  if (!web_contents) {
+    LOG(WARNING) << "[xenon_ai] ApplyInferencerRewrite: null WebContents";
+    return;
+  }
+  if (success) {
+    auto* rewrite_data = static_cast<XenonAiRewriteData*>(
+        web_contents->GetUserData(kXenonAiRewriteDataKey));
+    if (!rewrite_data) {
+      LOG(WARNING) << "[xenon_ai] ApplyInferencerRewrite: success but no "
+                      "UserData (tab navigated away?)";
+      return;
+    }
+
+    web_contents->RestoreFocus();
+
+    if (!rewrite_data->accumulated_text.empty()) {
+      web_contents->Undo();
+    }
+
+    base::StrAppend(&rewrite_data->accumulated_text, {text});
+    VLOG(1) << "[xenon_ai] Replace accumulated_len="
+            << rewrite_data->accumulated_text.size();
+    web_contents->Replace(base::UTF8ToUTF16(rewrite_data->accumulated_text));
+    web_contents->RemoveUserData(kXenonAiRewriteDataKey);
+  } else {
+    auto* rewrite_data = static_cast<XenonAiRewriteData*>(
+        web_contents->GetUserData(kXenonAiRewriteDataKey));
+    if (rewrite_data && !rewrite_data->accumulated_text.empty()) {
+      web_contents->Undo();
+    }
+    web_contents->RemoveUserData(kXenonAiRewriteDataKey);
+  }
+  VLOG(1) << "[xenon_ai] ApplyInferencerRewrite done success=" << success;
+}
 
 }  // namespace
 
@@ -94,7 +137,11 @@ void XenonAiContextMenuObserver::ExecuteCommand(int command_id) {
 }
 
 void XenonAiContextMenuObserver::ExecuteCommand(int command_id, int event_flags) {
-  if (!IsCommandIdSupported(command_id)) return;
+  if (!IsCommandIdSupported(command_id)) {
+    return;
+  }
+
+  VLOG(1) << "[xenon_ai] ExecuteCommand id=" << command_id;
 
   bool is_rewrite_cmd = (command_id == IDC_XENON_AI_CONTEXT_PROFESSIONALIZE);
   // Brave Leo in-place rewrite requires: editable selection, opt-in, feature flag,
@@ -105,10 +152,40 @@ void XenonAiContextMenuObserver::ExecuteCommand(int command_id, int event_flags)
                           is_rewrite_cmd &&
                           !web_contents_->GetUserData(kXenonAiRewriteDataKey);
 
+  VLOG(1) << "[xenon_ai] rewrite_in_place=" << rewrite_in_place
+          << " is_editable=" << params_->is_editable
+          << " is_rewrite_cmd=" << is_rewrite_cmd
+          << " has_rewrite_userdata="
+          << (web_contents_->GetUserData(kXenonAiRewriteDataKey) != nullptr);
+
   if (rewrite_in_place) {
     web_contents_->SetUserData(kXenonAiRewriteDataKey,
-                               std::make_unique<XenonAiRewriteData>());
-    // TODO: Connect to XenonAiService and call GenerateRewriteSuggestion
+                                std::make_unique<XenonAiRewriteData>());
+    XenonAiService* ai_service = XenonAiServiceFactory::GetForProfile(
+        Profile::FromBrowserContext(web_contents_->GetBrowserContext()));
+    if (!ai_service) {
+      LOG(WARNING) << "[xenon_ai] XenonAiServiceFactory returned null";
+      web_contents_->RemoveUserData(kXenonAiRewriteDataKey);
+      return;
+    }
+    const std::string selection_utf8 =
+        base::UTF16ToUTF8(params_->selection_text);
+    ai_service->RunInferencerRewriteAsync(
+        "Rewrite the selection to be more professional and polished. "
+        "Preserve the original language (same language as the source).",
+        selection_utf8,
+        base::BindOnce(
+            [](base::WeakPtr<content::WebContents> web_contents, bool success,
+               const std::string& text) {
+              if (!web_contents) {
+                LOG(WARNING) << "[xenon_ai] rewrite callback: WebContents gone "
+                                "(weak_ptr expired)";
+                return;
+              }
+              ApplyInferencerRewriteOnWebContents(web_contents.get(), success,
+                                                  text);
+            },
+            web_contents_->GetWeakPtr()));
   } else {
     // Open Xenon AI Side Panel and submit selected text
     std::string text = base::UTF16ToUTF8(params_->selection_text);
@@ -130,32 +207,6 @@ void XenonAiContextMenuObserver::ExecuteCommand(int command_id, int event_flags)
 
 bool XenonAiContextMenuObserver::IsXenonAiEnabled() const {
   return !params_->selection_text.empty();
-}
-
-void XenonAiContextMenuObserver::OnRewriteSuggestionDataReceived(
-    const std::string& suggestion_delta) {
-  auto* rewrite_data = static_cast<XenonAiRewriteData*>(
-      web_contents_->GetUserData(kXenonAiRewriteDataKey));
-  if (!rewrite_data) return;
-
-  if (!rewrite_data->accumulated_text.empty()) {
-    web_contents_->Undo();
-  }
-
-  base::StrAppend(&rewrite_data->accumulated_text, {suggestion_delta});
-  web_contents_->Replace(base::UTF8ToUTF16(rewrite_data->accumulated_text));
-}
-
-void XenonAiContextMenuObserver::OnRewriteSuggestionCompleted(
-    const std::string& selected_text, bool success) {
-  if (!success) {
-    auto* rewrite_data = static_cast<XenonAiRewriteData*>(
-        web_contents_->GetUserData(kXenonAiRewriteDataKey));
-    if (rewrite_data && !rewrite_data->accumulated_text.empty()) {
-      web_contents_->Undo();
-    }
-  }
-  web_contents_->RemoveUserData(kXenonAiRewriteDataKey);
 }
 
 }  // namespace xenon

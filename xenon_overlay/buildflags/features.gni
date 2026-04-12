@@ -22,4 +22,8 @@ declare_args() {
 declare_args() {
   # Xenon AI: Profile KeyedService + chrome://xenon-ai-side-panel WebUI + Side Panel entry.
   enable_xenon_ai = enable_xenon_service
+
+  # Cargo-built xenon_ai_inferencer_burn (GN action → $root_out_dir). Requires cargo on PATH.
+  # Set false to skip that action (Chrome still builds; rewrite needs a manually copied sidecar).
+  build_xenon_ai_inferencer_burn = true
 }
