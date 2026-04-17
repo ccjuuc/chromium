@@ -1,8 +1,9 @@
-# Burn + Llama 3.2 1B Instruct sidecar. Built automatically when `enable_xenon_ai`
-# via GN action `//xenon_overlay/xenon_ai_inferencer_burn:xenon_ai_inferencer_burn`
-# (runs `cargo build --release`; needs `cargo` on PATH).
+# Burn + Llama 3.2 1B Instruct sidecar. Built when `enable_xenon_ai` via GN action
+# `//xenon_overlay/xenon_ai_inferencer_burn:xenon_ai_inferencer_burn`, which runs
+# `tools/crates/run_cargo.py` (Chromium //third_party/rust-toolchain), not rustup.
 #
-# Manual: cargo build --release
+# Manual (from Chromium src/): python3 tools/crates/run_cargo.py build --release
+#   --manifest-path=xenon_overlay/xenon_ai_inferencer_burn/Cargo.toml
 #
 # Default: Vulkan + f16 (GPU, larger binary, faster).
 # Smaller binary / fewer deps (CPU only, much slower on 1B):

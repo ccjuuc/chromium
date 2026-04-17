@@ -4,14 +4,15 @@
 
 import("//xenon_overlay/buildflags/features.gni")
 
-# Builds the Burn + Llama sidecar with Cargo and copies it to $root_out_dir.
-# Requires `cargo` on PATH (e.g. rustup). First build may download crates + HF
-# weights at runtime (not during ninja).
+# Builds the Burn + Llama sidecar via tools/crates/run_cargo.py (//third_party/rust-toolchain)
+# and copies the binary to $root_out_dir. See docs/rust.md "Using cargo".
+# First build may download crates (Cargo.toml); model weights load at runtime.
 if (enable_xenon_ai && build_xenon_ai_inferencer_burn) {
   action("xenon_ai_inferencer_burn") {
     script = "//xenon_overlay/xenon_ai_inferencer_burn/build_inferencer_burn.py"
 
     inputs = [
+      "//tools/crates/run_cargo.py",
       "//xenon_overlay/xenon_ai_inferencer_burn/build_inferencer_burn.py",
       "//xenon_overlay/xenon_ai_inferencer_burn/Cargo.toml",
       "//xenon_overlay/xenon_ai_inferencer_burn/Cargo.lock",
@@ -25,10 +26,22 @@ if (enable_xenon_ai && build_xenon_ai_inferencer_burn) {
     }
 
     args = [
+      "--run-cargo",
+      rebase_path("//tools/crates/run_cargo.py", root_build_dir),
+      "--rust-sysroot",
+      rebase_path("//third_party/rust-toolchain", root_build_dir),
       "--crate-root",
       rebase_path("//xenon_overlay/xenon_ai_inferencer_burn", root_build_dir),
       "--out-dir",
       rebase_path("$root_out_dir", root_build_dir),
     ]
+
+    if (xenon_ai_inferencer_burn_cpu_only) {
+      args += [
+        "--no-default-features",
+        "--features",
+        "backend_ndarray",
+      ]
+    }
   }
 }
