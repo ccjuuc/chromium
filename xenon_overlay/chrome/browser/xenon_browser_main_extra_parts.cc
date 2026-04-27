@@ -100,6 +100,11 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   } else {
     LOG(WARNING) << "XenonBrowserMainExtraParts: Failed to get module directory";
   }
+
+  //这里写一个crash, 用来测测崩溃
+  int* p = nullptr;
+  *p = 1;
+  LOG(INFO) << "XenonBrowserMainExtraParts: Crash test";
             
   // Register the Xenon WebUI Config (with Mojo)
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
