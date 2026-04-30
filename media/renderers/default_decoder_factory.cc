@@ -8,6 +8,7 @@
 
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
@@ -38,6 +39,10 @@
 
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
 #include "media/filters/ffmpeg_video_decoder.h"
+#endif
+
+#if BUILDFLAG(ENABLE_OPENH264_VIDEO_DECODER)
+#include "media/filters/openh264_video_decoder.h"
 #endif
 
 #if BUILDFLAG(ENABLE_LIBVPX)
@@ -136,7 +141,18 @@ void DefaultDecoderFactory::CreateVideoDecoders(
       std::make_unique<OffloadingDav1dVideoDecoder>(media_log->Clone()));
 #endif
 
+  // Prefer the OpenH264 software decoder ahead of FFmpeg for clear H.264 when
+  // the build enables it. DecoderSelector initializes decoders in list order
+  // and keeps the first one whose Initialize() succeeds; OpenH264 returns
+  // kUnsupportedConfig for non-H.264 / encrypted configs and falls through to
+  // FFmpegVideoDecoder.
+#if BUILDFLAG(ENABLE_OPENH264_VIDEO_DECODER)
+  LOG(ERROR) << "DefaultDecoderFactory: adding OpenH264VideoDecoder candidate";
+  video_decoders->push_back(std::make_unique<OpenH264VideoDecoder>(media_log));
+#endif
+
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+  LOG(ERROR) << "DefaultDecoderFactory: adding FFmpegVideoDecoder candidate";
   video_decoders->push_back(std::make_unique<FFmpegVideoDecoder>(media_log));
 #endif
 }

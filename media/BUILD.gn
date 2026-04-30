@@ -28,6 +28,12 @@ buildflag_header("media_buildflags") {
   enable_passthrough_audio_codecs =
       enable_platform_dts_audio && (is_win || is_linux)
 
+  # OpenH264VideoDecoder requires `media_use_openh264` (which itself requires
+  # proprietary_codecs) so the decoder source set in //third_party/openh264 is
+  # available, plus the H264 Annex-B converter from media/filters.
+  enable_openh264_video_decoder_in_build =
+      enable_openh264_video_decoder && media_use_openh264 && proprietary_codecs
+
   flags = [
     "ALLOW_OOP_VIDEO_DECODER=$allow_oop_video_decoder",
     "ALLOW_HOSTING_OOP_VIDEO_DECODER=$allow_hosting_oop_video_decoder",
@@ -38,6 +44,7 @@ buildflag_header("media_buildflags") {
     "ENABLE_PLATFORM_AC4_AUDIO=$enable_platform_ac4_audio",
     "ENABLE_CAST_AUDIO_RENDERER=$enable_cast_audio_renderer",
     "ENABLE_DAV1D_DECODER=$enable_dav1d_decoder",
+    "ENABLE_OPENH264_VIDEO_DECODER=$enable_openh264_video_decoder_in_build",
     "ENABLE_AV1_DECODER=$enable_av1_decoder",
     "ENABLE_PLATFORM_DOLBY_VISION=$enable_platform_dolby_vision",
     "ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION=$enable_platform_encrypted_dolby_vision",

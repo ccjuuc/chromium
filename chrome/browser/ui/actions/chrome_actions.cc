@@ -45,6 +45,12 @@ void InitializeActionIdStringMapping() {
           std::vector<std::pair<std::string, actions::ActionId>>{
               TOOLBAR_PINNABLE_ACTION_IDS}));
 
+  // Backward compatibility for a previously persisted toolbar action id.
+  actions::ActionIdMap::AddStringToActionIdMappings(
+      base::flat_map<std::string, actions::ActionId>(
+          std::vector<std::pair<std::string, actions::ActionId>>{
+              {"kActionXenonOpenVideoPlayer", kActionSidePanelShowXenonAI}}));
+
 #include "ui/actions/action_id_macros.inc"
 #undef MAP_STRING_TO_ACTION_IDS
 }

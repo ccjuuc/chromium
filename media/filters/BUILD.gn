@@ -191,6 +191,15 @@ source_set("filters") {
       ]
     }
 
+    if (enable_openh264_video_decoder && media_use_openh264 &&
+        proprietary_codecs) {
+      sources += [
+        "openh264_video_decoder.cc",
+        "openh264_video_decoder.h",
+      ]
+      deps += [ "//third_party/openh264:decoder" ]
+    }
+
     if (is_android) {
       sources += [
         "android/video_frame_extractor.cc",

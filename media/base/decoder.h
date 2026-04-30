@@ -56,9 +56,11 @@ enum class VideoDecoderType : int {
   kTesting = 17,       // Never send this to UKM, for tests only.
   kOutOfProcess = 18,  // OOPVideoDecoder (Linux and ChromeOS)
   kVideoToolbox = 19,  // VideoToolboxVideoDecoder (Mac)
+  // kVlc = 20,        // (DEPRECATED, removed) VlcVideoDecoder.
+  kOpenH264 = 21,       // OpenH264VideoDecoder (Cisco OpenH264; see filters/)
 
   // Keep this at the end and equal to the last entry.
-  kMaxValue = kVideoToolbox
+  kMaxValue = kOpenH264
 };
 
 MEDIA_EXPORT const char* GetDecoderName(AudioDecoderType type);
