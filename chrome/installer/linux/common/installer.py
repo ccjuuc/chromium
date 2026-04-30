@@ -669,18 +669,7 @@ class InstallerConfig:
                     StandardPermissions.REGULAR,
                 ))
 
-        # Xenon resources
-        xenon_pak = self.output_dir / "xenon_resources.pak"
-        if xenon_pak.exists():
-            artifacts.append(
-                Artifact(
-                    "xenon_resources.pak",
-                    "xenon_resources.pak",
-                    ArtifactType.RESOURCE,
-                    StandardPermissions.REGULAR,
-                ))
-
-        # Xenon extension resources
+        # Xenon extension resources (xenon grit is merged into resources.pak)
         xenon_extension_dir = self.output_dir / "resources/xenon_extension"
         if xenon_extension_dir.exists():
             artifacts.append(

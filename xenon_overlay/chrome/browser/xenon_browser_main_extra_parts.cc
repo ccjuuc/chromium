@@ -3,17 +3,11 @@
 #include "xenon_overlay/buildflags/buildflags.h"
 #include "xenon_overlay/chrome/browser/xenon_login_startup_registration.h"
 
-#include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/path_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/webui_config_map.h"
-#include "ui/base/resource/resource_bundle.h"
-#include "ui/base/resource/resource_scale_factor.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
@@ -86,21 +80,6 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   LOG(INFO) << "XenonBrowserMainExtraParts: Initializing XenonManager for profile: "
             << profile->GetDebugName();
 
-  // Load Xenon Resources
-  base::FilePath pak_path;
-  if (base::PathService::Get(base::DIR_MODULE, &pak_path)) {
-    pak_path = pak_path.AppendASCII("xenon_resources.pak");
-    if (base::PathExists(pak_path)) {
-      ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-          pak_path, ui::kScaleFactorNone);
-      LOG(INFO) << "XenonBrowserMainExtraParts: Loaded resource pak from " << pak_path;
-    } else {
-      LOG(WARNING) << "XenonBrowserMainExtraParts: Resource pak not found at " << pak_path;
-    }
-  } else {
-    LOG(WARNING) << "XenonBrowserMainExtraParts: Failed to get module directory";
-  }
-            
   // Register the Xenon WebUI Config (with Mojo)
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::XenonWebUIConfig>());

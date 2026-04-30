@@ -244,7 +244,7 @@ declare_args() {
   # Registers `OpenH264VideoDecoder` ahead of `FFmpegVideoDecoder`. Clear H.264
   # is decoded via Cisco's OpenH264 (already in //third_party/openh264).
   # Requires `proprietary_codecs` for AVCC -> Annex-B conversion of MP4 streams.
-  enable_openh264_video_decoder = false
+  enable_openh264_video_decoder = true
 }
 
 declare_args() {

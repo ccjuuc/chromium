@@ -1556,9 +1556,19 @@ if (!is_android) {
       mark_as_data = true
     }
 
+    # Xenon: merge //xenon_overlay/resources into chrome_extra_paks output
+    # (resources.pak) so ResourceBundle loads them with default pak startup path.
+    additional_extra_paks = [
+      "$root_gen_dir/xenon_overlay/resources/xenon_resources.pak",
+    ]
+    _packed_resources_xenon_grit_dep =
+        [ "//xenon_overlay/resources:resources_grit" ]
+
     if (enable_resource_allowlist_generation) {
       repack_allowlist = _chrome_resource_allowlist
-      deps = [ ":resource_allowlist" ]
+      deps = [ ":resource_allowlist" ] + _packed_resources_xenon_grit_dep
+    } else {
+      deps = _packed_resources_xenon_grit_dep
     }
 
     if (is_chrome_branded && !is_mac) {

@@ -36,7 +36,6 @@ vk_swiftshader.dll: %(VersionDir)s\
 vk_swiftshader_icd.json: %(VersionDir)s\
 vulkan-1.dll: %(VersionDir)s\
 v8_context_snapshot.bin: %(VersionDir)s\
-xenon_resources.pak: %(VersionDir)s\
 #
 # Sub directories living in the version dir
 #
