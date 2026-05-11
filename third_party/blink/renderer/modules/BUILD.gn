@@ -735,6 +735,7 @@ source_set("unit_tests") {
     "//third_party/webrtc_overrides:webrtc_component",
     "//ui/accessibility",
     "//ui/strings:ax_strings_grit",
+    "//xenon_overlay/buildflags:buildflags",
     "//v8",
   ]
 

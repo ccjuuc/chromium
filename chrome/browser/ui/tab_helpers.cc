@@ -153,7 +153,7 @@
 #include "printing/buildflags/buildflags.h"
 #include "rlz/buildflags/buildflags.h"
 #include "ui/accessibility/accessibility_features.h"
-
+#include "xenon_overlay/content/browser/video_sniffer_observer.h"
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/android_info.h"
 #include "base/functional/bind.h"
@@ -604,6 +604,9 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
       web_contents);
   vr::VrTabHelper::CreateForWebContents(web_contents);
   OneTimePermissionsTrackerHelper::CreateForWebContents(web_contents);
+
+  // Attach Xenon video sniffer to all regular tabs.
+  xenon::VideoSnifferObserver::CreateForWebContents(web_contents);
 
   // NO! Do not just add your tab helper here. This is a large alphabetized
   // block; please insert your tab helper above in alphabetical order.

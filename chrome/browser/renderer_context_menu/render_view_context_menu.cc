@@ -32,6 +32,7 @@
 #include "base/system/sys_info.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
@@ -74,6 +75,10 @@
 
 #if BUILDFLAG(ENABLE_XENON_AI)
 #include "xenon_overlay/chrome/browser/xenon_ai/xenon_ai_context_menu_observer.h"
+#endif
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/content/browser/video_sniffer_manager.h"
 #endif
 
 #include "chrome/browser/renderer_context_menu/spelling_menu_observer.h"
@@ -4456,6 +4461,19 @@ void RenderViewContextMenu::ExecSaveAs() {
       return;
     }
   }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  // Omnibox or inline .m3u8: Chrome download only saves the playlist; run Xenon
+  // HLS synthesis instead so the user gets a concatenated .ts/.mp4 file.
+  if (params_.media_type == ContextMenuDataMediaType::kVideo &&
+      params_.src_url.is_valid() &&
+      base::EndsWith(params_.src_url.path(), ".m3u8",
+                     base::CompareCase::INSENSITIVE_ASCII)) {
+    xenon::VideoSnifferManager::GetInstance()->SynthesizeGroup(
+        params_.src_url.spec(), browser_context_);
+    return;
+  }
+#endif
 
   net::HttpRequestHeaders headers;
 

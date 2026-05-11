@@ -30,6 +30,11 @@
       <include name="IDR_SIMPLE_WEBUI_INDEX_HTML" file="webui/simple_webui/index.html" type="BINDATA" />
       <include name="IDR_SIMPLE_WEBUI_INDEX_CSS" file="webui/simple_webui/index.css" type="BINDATA" />
       <include name="IDR_SIMPLE_WEBUI_INDEX_JS" file="webui/simple_webui/index.js" type="BINDATA" />
+      
+      <!-- Video Sniffer WebUI -->
+      <include name="IDR_VIDEO_SNIFFER_WEBUI_INDEX_HTML" file="webui/video_sniffer/index.html" type="BINDATA" />
+      <include name="IDR_VIDEO_SNIFFER_WEBUI_INDEX_CSS" file="webui/video_sniffer/index.css" type="BINDATA" />
+      <include name="IDR_VIDEO_SNIFFER_WEBUI_INDEX_JS" file="webui/video_sniffer/index.js" type="BINDATA" />
 
       <include name="IDR_XENON_AI_SIDE_PANEL_HTML" file="webui/xenon_ai_side_panel/xenon_ai_side_panel.html" type="BINDATA" />
       <include name="IDR_XENON_AI_SIDE_PANEL_JS" file="webui/xenon_ai_side_panel/xenon_ai_side_panel.js" type="BINDATA" />

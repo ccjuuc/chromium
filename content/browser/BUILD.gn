@@ -2000,6 +2000,8 @@ source_set("browser") {
     "renderer_host/render_frame_host_impl.h",
     "renderer_host/render_frame_host_impl_interface_binders.cc",
     "//xenon_overlay/content/browser/render_frame_host_xenon_data_mask.cc",
+    "//xenon_overlay/content/browser/video_sniffer_manager.cc",
+    "//xenon_overlay/content/browser/video_sniffer_observer.cc",
     "renderer_host/render_frame_host_manager.cc",
     "renderer_host/render_frame_host_manager.h",
     "renderer_host/render_frame_host_owner.h",

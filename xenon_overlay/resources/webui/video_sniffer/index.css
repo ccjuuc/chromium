@@ -1,0 +1,180 @@
+:root {
+  --bg-color: #1e1e1e;
+  --text-color: #f0f0f0;
+  --surface-color: #2d2d2d;
+  --border-color: #404040;
+  --primary-color: #3b82f6;
+  --primary-hover: #2563eb;
+  --danger-color: #ef4444;
+  --danger-hover: #dc2626;
+  --text-muted: #9ca3af;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 500;
+}
+
+button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  color: white;
+}
+
+.primary-btn {
+  background-color: var(--primary-color);
+  margin-right: 8px;
+}
+
+.primary-btn:hover {
+  background-color: var(--primary-hover);
+}
+
+.danger-btn {
+  background-color: var(--danger-color);
+}
+
+.danger-btn:hover {
+  background-color: var(--danger-hover);
+}
+
+.table-container {
+  background-color: var(--surface-color);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+th, td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  word-wrap: break-word;
+}
+
+th {
+  background-color: #252525;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr:hover {
+  background-color: #353535;
+}
+
+.copy-btn {
+  background-color: transparent;
+  color: var(--primary-color);
+  border: 1px solid var(--primary-color);
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.copy-btn:hover {
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+.action-cell {
+  display: flex;
+  gap: 8px;
+}
+
+.action-cell button {
+  padding: 6px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  font-size: 16px;
+}
+
+.action-cell button:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-color: var(--primary-color);
+}
+
+.download-btn-small:hover {
+  color: #10b981;
+  border-color: #10b981 !important;
+}
+
+.merge-btn-small:hover {
+  color: #f59e0b;
+  border-color: #f59e0b !important;
+}
+
+.segment-badge {
+  color: var(--primary-color);
+  font-size: 11px;
+  font-weight: bold;
+  margin-left: 4px;
+}
+
+.empty-state {
+  display: none;
+  text-align: center;
+  padding: 64px 24px;
+}
+
+.empty-state.visible {
+  display: block;
+}
+
+.empty-state .icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.empty-state h2 {
+  margin: 0 0 8px 0;
+  font-weight: 500;
+}
+
+.empty-state p {
+  color: var(--text-muted);
+  margin: 0;
+}

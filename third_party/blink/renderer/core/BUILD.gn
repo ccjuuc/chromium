@@ -448,6 +448,7 @@ component("core") {
     "//third_party/blink/public/strings:permission_element_strings_grit",
     "//third_party/rust/xml/v1:lib",
     "//tools/v8_context_snapshot:buildflags",
+    "//xenon_overlay/buildflags:buildflags",
     "//ui/base/cursor/mojom:cursor_type_blink",
     "//ui/base/dragdrop/mojom:mojom_blink",
     "//ui/gfx:gfx_skia",

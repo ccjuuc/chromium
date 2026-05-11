@@ -42,6 +42,8 @@ source_set("browser") {
     "ui/svg_image_source.h",
     "ui/webui/simple_webui_controller.cc",
     "ui/webui/simple_webui_controller.h",
+    "ui/webui/video_sniffer_webui_controller.cc",
+    "ui/webui/video_sniffer_webui_controller.h",
     "ui/webui/xenon_page_handler.cc",
     "ui/webui/xenon_page_handler.h",
     "ui/webui/xenon_webui_controller.cc",

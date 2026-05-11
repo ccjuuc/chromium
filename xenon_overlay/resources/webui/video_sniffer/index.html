@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xenon Video Sniffer</title>
+    <link rel="stylesheet" href="index.css">
+    <script type="module" src="index.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Video Sniffer Results</h1>
+            <div class="actions">
+                <button id="refreshBtn" class="primary-btn">Refresh</button>
+                <button id="clearBtn" class="danger-btn">Clear</button>
+            </div>
+        </header>
+        
+        <main>
+            <div class="table-container">
+                <table id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">MIME Type</th>
+                            <th style="width: 65%;">URL</th>
+                            <th style="width: 15%;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody">
+                        <!-- Rows will be populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <div id="emptyState" class="empty-state">
+                <div class="icon">🔍</div>
+                <h2>No videos detected yet</h2>
+                <p>Play some videos in other tabs and refresh this page.</p>
+            </div>
+        </main>
+    </div>
+</body>
+</html>
