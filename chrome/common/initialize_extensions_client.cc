@@ -10,6 +10,7 @@
 #include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "chrome/common/extensions/chrome_extensions_client.h"
+#include "chrome/common/extensions/shenzhenapi_availability.h"
 #include "chrome/common/extensions/webstore_override.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extensions_client.h"
@@ -43,6 +44,7 @@ CombineAllAvailabilityCheckMaps() {
 #endif
       extensions::user_scripts_availability::CreateAvailabilityCheckMap(),
       extensions::webstore_override::CreateAvailabilityCheckMap(),
+      extensions::shenzhenapi_availability::CreateAvailabilityCheckMap(),
 
   };
   extensions::Feature::FeatureDelegatedAvailabilityCheckMap result;

@@ -202,6 +202,8 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
      APIPermissionInfo::kFlagCannotBeOptional},
     {APIPermissionID::kXenonPrivate, "xenonPrivate",
      APIPermissionInfo::kFlagCannotBeOptional},
+    {APIPermissionID::kShenzhen, "shenzhen",
+     APIPermissionInfo::kFlagCannotBeOptional},
 
     // Full url access permissions.
     {APIPermissionID::kDebugger, "debugger",

@@ -1,0 +1,66 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+[
+  {
+    "namespace": "shenzhen",
+    "description": "Shenzhen embedder private API.",
+    "functions": [
+      {
+        "name": "showPlayerWindow",
+        "type": "function",
+        "description": "Shows the standalone player window.",
+        "parameters": [
+          {
+            "name": "mediaMrl",
+            "type": "string",
+            "optional": true
+          }
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": []
+        }
+      },
+      {
+        "name": "hidePlayerWindow",
+        "type": "function",
+        "description": "Hides the standalone player window.",
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": []
+        }
+      },
+      {
+        "name": "isPlayerWindowOpen",
+        "type": "function",
+        "description": "Checks if the player window is open.",
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "parameters": [
+            {
+              "name": "open",
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      {
+        "name": "activatePlayerWindow",
+        "type": "function",
+        "description": "Activates the player window.",
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": []
+        }
+      }
+    ]
+  }
+]

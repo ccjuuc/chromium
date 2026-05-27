@@ -2872,6 +2872,10 @@ Called by update_extension_histograms.py.-->
   <int value="1955" label="WEBSTOREPRIVATE_LOGENTERPRISEPROMOSHOWN"/>
   <int value="1956" label="WEBSTOREPRIVATE_ONENTERPRISEPROMOCLICK"/>
   <int value="1957" label="XENONPRIVATE_PING"/>
+  <int value="1958" label="SHENZHEN_SHOWPLAYERWINDOW"/>
+  <int value="1959" label="SHENZHEN_HIDEPLAYERWINDOW"/>
+  <int value="1960" label="SHENZHEN_ISPLAYERWINDOWOPEN"/>
+  <int value="1961" label="SHENZHEN_ACTIVATEPLAYERWINDOW"/>
 </enum>
 
 <!-- LINT.ThenChange(//extensions/browser/extension_function_histogram_value.h:HistogramValue) -->
@@ -3262,6 +3266,7 @@ Called by update_extension_permission.py.-->
   <int value="262" label="kExperimentalActor"/>
   <int value="263" label="kEnterpriseLogin"/>
   <int value="264" label="kXenonPrivate"/>
+  <int value="265" label="kShenzhen"/>
 </enum>
 
 <enum name="ExtensionPolicyReinstallReason">

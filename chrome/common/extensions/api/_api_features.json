@@ -1126,6 +1126,23 @@
     "dependencies": ["permission:wmDesksPrivate"],
     "contexts": ["privileged_extension"]
   },
+  "shenzhen": [
+    {
+      "dependencies": ["permission:shenzhen"],
+      "contexts": ["privileged_extension"]
+    },
+    {
+      "channel": "stable",
+      "contexts": ["webui"],
+      "matches": ["chrome://shenzhen/*"]
+    },
+    {
+      "channel": "stable",
+      "contexts": ["web_page"],
+      "requires_delegated_availability_check": true,
+      "matches": ["<all_urls>"]
+    }
+  ],
   "xenonPrivate": {
     "dependencies": ["permission:xenonPrivate"],
     "contexts": ["privileged_extension"]

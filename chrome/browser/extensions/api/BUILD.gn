@@ -69,6 +69,7 @@ group("api_implementations") {
       "//chrome/browser/extensions/api/command_line_private",
       "//chrome/browser/extensions/api/content_settings",
       "//xenon_overlay/chrome/browser/extensions/api/xenon_private",
+      "//chrome/browser/extensions/api/shenzhen",
       "//chrome/browser/extensions/api/experimental_actor",
       "//chrome/browser/extensions/api/experimental_ai_data",
       "//chrome/browser/extensions/api/idltest",
@@ -126,6 +127,9 @@ function_registration("api_registration") {
     # Xenon: generated_api_registration includes chrome/.../xenon_private shim;
     # implementation is //xenon_overlay/.../xenon_private.
     "//xenon_overlay/chrome/browser/extensions/api/xenon_private",
+
+    # Shenzhen
+    "//chrome/browser/extensions/api/shenzhen",
 
     # Different APIs include headers from these targets.
     "//chrome/browser/ai",

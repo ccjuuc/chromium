@@ -425,6 +425,7 @@ const std::string_view kWebAvailableFeatures[] = {
     "app",
     "webstorePrivate",
     "management",
+    "shenzhen",
 };
 
 // Determines if a JS stack trace capture should happen just before

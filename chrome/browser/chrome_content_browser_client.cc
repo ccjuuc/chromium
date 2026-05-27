@@ -196,6 +196,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/crash_keys.h"
 #include "chrome/common/env_vars.h"
+#include "chrome/common/extensions/shenzhenapi_availability.h"
 #include "chrome/common/google_url_loader_throttle.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/pref_names.h"
@@ -2730,6 +2731,12 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
 #endif
 
   if (process_type == switches::kRendererProcess) {
+    std::vector<std::string> allowed_domains = extensions::shenzhenapi_availability::GetAllowedDomains();
+    if (!allowed_domains.empty()) {
+      std::string domains_str = base::JoinString(allowed_domains, ",");
+      command_line->AppendSwitchASCII(extensions::shenzhenapi_availability::kShenzhenAllowedDomainsSwitch, domains_str);
+    }
+
     content::RenderProcessHost* process =
         content::RenderProcessHost::FromID(child_process_id);
     if (process) {

@@ -78,6 +78,7 @@ if (enable_extensions) {
     "chrome_web_view_internal.json",
     "command_line_private.json",
     "xenon_private.json",
+    "shenzhen.json",
     "content_settings.json",
     "crash_report_private.idl",
     "enterprise_reporting_private.idl",
