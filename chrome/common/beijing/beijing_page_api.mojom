@@ -1,0 +1,33 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module beijing.mojom;
+
+import "mojo/public/mojom/base/values.mojom";
+
+// 供浏览器进程向渲染进程发送订阅事件的接口
+interface BeijingPageClient {
+  OnEvent(string topic, mojo_base.mojom.Value payload);
+};
+
+// 供渲染进程中 window.beijing 调用的浏览器侧 Mojo 接收服务
+interface BeijingPageHost {
+  // 连通性测试
+  Ping() => (bool ok, string message);
+
+  // 获取通用接口版本
+  GetApiVersion() => (string version);
+
+  // 通用对象回显
+  EchoObject(mojo_base.mojom.Value input) => (mojo_base.mojom.Value output);
+
+  // 回显对象并包装浏览器端元数据
+  WrapObjectWithBrowserMeta(mojo_base.mojom.Value input) => (mojo_base.mojom.Value output);
+
+  // 订阅主题，传递一个 pending_associated_remote<BeijingPageClient>
+  Subscribe(string topic, pending_associated_remote<BeijingPageClient> client);
+
+  // 发布事件到主题
+  Publish(string topic, mojo_base.mojom.Value payload);
+};

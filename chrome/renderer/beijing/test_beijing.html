@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Beijing C++ Event Bus Test Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #0d0f14;
+      --card-bg: rgba(20, 24, 33, 0.7);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --primary: #06b6d4; /* Cyan */
+      --primary-hover: #0891b2;
+      --secondary: #a855f7; /* Purple */
+      --secondary-hover: #9333ea;
+      --accent: #10b981; /* Green */
+      --accent-hover: #059669;
+      --warning: #f59e0b; /* Amber */
+      --error: #ef4444;
+      --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      --font-outfit: 'Outfit', sans-serif;
+      --font-mono: 'Fira Code', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      font-family: var(--font-outfit);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2.5rem 1.5rem;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(6, 182, 212, 0.1) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.08) 0px, transparent 50%);
+    }
+
+    .container {
+      width: 100%;
+      max-width: 900px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+
+    h1 {
+      font-weight: 800;
+      font-size: 2.5rem;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.025em;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+      font-weight: 300;
+    }
+
+    .connection-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      border: 1px solid var(--border-color);
+      background: rgba(255, 255, 255, 0.03);
+      margin-top: 1rem;
+      backdrop-filter: blur(8px);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--warning);
+      box-shadow: 0 0 8px var(--warning);
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.connected {
+      background-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+
+    .status-dot.disconnected {
+      background-color: var(--error);
+      box-shadow: 0 0 8px var(--error);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 1.5rem;
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .card-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .card-title.sub {
+      color: var(--secondary);
+    }
+
+    .card-title.pub {
+      color: var(--primary);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    label {
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    input, textarea {
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.75rem;
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    input:focus, textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 120px;
+    }
+
+    .btn {
+      padding: 0.75rem 1.2rem;
+      border-radius: 8px;
+      border: none;
+      font-family: var(--font-outfit);
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #000;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: var(--secondary);
+      color: #fff;
+    }
+
+    .btn-secondary:hover {
+      background: var(--secondary-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+    }
+
+    .btn-outline:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .card-full {
+      grid-column: 1 / -1;
+    }
+
+    .console {
+      background: #05070a;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1rem;
+      height: 250px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.8);
+    }
+
+    .log-entry {
+      line-height: 1.4;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .log-time {
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .log-tag {
+      font-weight: bold;
+      padding: 0 0.3rem;
+      border-radius: 3px;
+      font-size: 0.75rem;
+    }
+
+    .log-tag.info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+    .log-tag.recv { background: rgba(168, 85, 247, 0.2); color: #c084fc; }
+    .log-tag.sent { background: rgba(6, 182, 212, 0.2); color: #22d3ee; }
+    .log-tag.err { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+
+    .log-msg {
+      word-break: break-all;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.6; }
+      50% { opacity: 1; }
+      100% { opacity: 0.6; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Beijing C++ Event Bus</h1>
+    <p class="subtitle">EventEmitter3 + BeijingBus over C++ Mojo publish/subscribe</p>
+    <div class="connection-status">
+      <div id="status-dot" class="status-dot"></div>
+      <span id="status-text">Checking C++ API Connection...</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- SUBSCRIBE PANEL -->
+    <section class="card">
+      <div class="card-title sub">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11a9 9 0 0 1 9 9"></path><path d="M4 4a16 16 0 0 1 16 16"></path><circle cx="5" cy="19" r="1"></circle></svg>
+        Subscribe Event Channel
+      </div>
+      <div class="form-group">
+        <label for="sub-topic-input">Topic Topic</label>
+        <input type="text" id="sub-topic-input" placeholder="e.g. news_feed" value="shared_topic">
+      </div>
+      <button id="btn-subscribe" class="btn btn-secondary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+        bus.on()
+      </button>
+      <button id="btn-unsubscribe" class="btn btn-outline" style="margin-top: 0.75rem;">
+        bus.off()
+      </button>
+    </section>
+
+    <!-- PUBLISH PANEL -->
+    <section class="card">
+      <div class="card-title pub">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"></path></svg>
+        Publish Broadcast
+      </div>
+      <div class="form-group">
+        <label for="pub-topic-input">Topic Topic</label>
+        <input type="text" id="pub-topic-input" placeholder="e.g. news_feed" value="shared_topic">
+      </div>
+      <div class="form-group">
+        <label for="payload-input">Payload Data (JSON)</label>
+        <textarea id="payload-input" placeholder="JSON payload">{\n  "message": "Hello from browser console!",\n  "timestamp": 123456789,\n  "sender": "localhost_test"\n}</textarea>
+      </div>
+      <button id="btn-publish" class="btn btn-primary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></svg>
+        bus.publish()
+      </button>
+    </section>
+
+    <!-- TERMINAL LOGGER -->
+    <section class="card card-full">
+      <div class="card-title" style="color: var(--accent); justify-content: space-between; width: 100%;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17 10 11 4 5M12 19h8"></path></svg>
+          Live Console Log Output
+        </div>
+        <div class="btn-group">
+          <button id="btn-ping" class="btn btn-outline" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">C++ Ping</button>
+          <button id="btn-clear" class="btn btn-outline" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">Clear Console</button>
+        </div>
+      </div>
+      <div id="console-log" class="console"></div>
+    </section>
+  </div>
+</div>
+
+<script src="eventemitter3.js"></script>
+<script src="beijing_bus.js"></script>
+<script>
+  const logContainer = document.getElementById('console-log');
+  const statusDot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+  let activeTopic = null;
+  let activeHandler = null;
+
+  function ensureBeijingBus() {
+    if (!window.beijing) {
+      return null;
+    }
+    if (!window.beijingBus) {
+      window.beijingBus = new BeijingBus(window.beijing);
+    }
+    return window.beijingBus;
+  }
+
+  function log(type, message) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+
+    const time = document.createElement('span');
+    time.className = 'log-time';
+    const now = new Date();
+    time.textContent = `[${now.toTimeString().split(' ')[0]}.${String(now.getMilliseconds()).padStart(3, '0')}]`;
+
+    const tag = document.createElement('span');
+    tag.className = `log-tag ${type}`;
+    tag.textContent = type.toUpperCase();
+
+    const msg = document.createElement('span');
+    msg.className = 'log-msg';
+    msg.textContent = typeof message === 'object' ? JSON.stringify(message, null, 2) : message;
+
+    entry.appendChild(time);
+    entry.appendChild(tag);
+    entry.appendChild(msg);
+
+    logContainer.appendChild(entry);
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
+
+  // 检查 API 连接情况
+  function checkApi() {
+    const bus = ensureBeijingBus();
+    if (bus) {
+      statusDot.className = 'status-dot connected';
+      statusText.textContent = 'C++ API + BeijingBus Engaged';
+      log('info', 'window.beijing and window.beijingBus are ready.');
+      
+      window.beijing.getApiVersion()
+        .then(ver => {
+          log('info', `C++ Engine Version: v${ver}`);
+        })
+        .catch(err => {
+          log('err', 'Failed to retrieve C++ version: ' + err);
+        });
+    } else {
+      statusDot.className = 'status-dot disconnected';
+      statusText.textContent = 'C++ API Disconnected. Ensure you are running under http://localhost/ or matching test domains.';
+      log('err', 'window.beijing is undefined. Please verify secure context (localhost or HTTPS) and domain permissions.');
+    }
+  }
+
+  // C++ Ping 动作
+  document.getElementById('btn-ping').addEventListener('click', () => {
+    if (!window.beijing) {
+      log('err', 'Ping aborted: C++ API unavailable');
+      return;
+    }
+    log('info', 'Sending ping query to Browser Process...');
+    window.beijing.ping()
+      .then(res => {
+        log('sent', `Ping Response: ${res}`);
+      })
+      .catch(err => {
+        log('err', `Ping Failed: ${err}`);
+      });
+  });
+
+  // bus.on() — 每个 topic 仅一条 Mojo 订阅，本地 fan-out
+  document.getElementById('btn-subscribe').addEventListener('click', () => {
+    const bus = ensureBeijingBus();
+    if (!bus) {
+      log('err', 'Subscription failed: C++ API unavailable');
+      return;
+    }
+    const topic = document.getElementById('sub-topic-input').value.trim();
+    if (!topic) {
+      log('err', 'Topic cannot be empty');
+      return;
+    }
+
+    if (activeTopic && activeHandler) {
+      bus.off(activeTopic, activeHandler);
+    }
+
+    activeHandler = (data) => {
+      log('recv', `Event [${topic}] payload: ${JSON.stringify(data)}`);
+    };
+    activeTopic = topic;
+
+    bus.on(topic, activeHandler);
+    log('info', `beijingBus.on("${topic}") registered. Open another tab and bus.publish() to the same topic.`);
+  });
+
+  document.getElementById('btn-unsubscribe').addEventListener('click', () => {
+    const bus = ensureBeijingBus();
+    if (!bus || !activeTopic || !activeHandler) {
+      log('err', 'Nothing to unsubscribe');
+      return;
+    }
+
+    bus.off(activeTopic, activeHandler);
+    log('info', `beijingBus.off("${activeTopic}") removed listener and released Mojo subscription when count hits 0.`);
+    activeTopic = null;
+    activeHandler = null;
+  });
+
+  // bus.publish() — 跨 Tab / Browser 广播
+  document.getElementById('btn-publish').addEventListener('click', () => {
+    const bus = ensureBeijingBus();
+    if (!bus) {
+      log('err', 'Publish failed: C++ API unavailable');
+      return;
+    }
+    const topic = document.getElementById('pub-topic-input').value.trim();
+    const rawPayload = document.getElementById('payload-input').value.trim();
+
+    if (!topic) {
+      log('err', 'Publish topic cannot be empty');
+      return;
+    }
+
+    let parsedPayload;
+    try {
+      parsedPayload = JSON.parse(rawPayload);
+    } catch (e) {
+      log('err', 'Invalid JSON payload. Please correct input.');
+      return;
+    }
+
+    try {
+      log('info', `Publishing event to topic "${topic}"...`);
+      bus.publish(topic, parsedPayload);
+      log('sent', `bus.publish("${topic}"): ${JSON.stringify(parsedPayload)}`);
+    } catch (e) {
+      log('err', `Publish Error: ${e.message}`);
+    }
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    logContainer.innerHTML = '';
+  });
+
+  // 页面加载就绪
+  window.addEventListener('load', () => {
+    setTimeout(checkApi, 200);
+  });
+</script>
+</body>
+</html>

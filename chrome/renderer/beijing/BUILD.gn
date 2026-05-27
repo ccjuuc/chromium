@@ -1,0 +1,19 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+source_set("beijing") {
+  sources = [
+    "beijing_render_frame_observer.h",
+    "beijing_render_frame_observer.cc",
+    "js_beijing_api.h",
+    "js_beijing_api.cc",
+  ]
+  deps = [
+    "//chrome/common/beijing:mojom",
+    "//content/public/renderer",
+    "//gin",
+    "//mojo/public/cpp/bindings",
+    "//third_party/blink/public:blink_headers",
+  ]
+}

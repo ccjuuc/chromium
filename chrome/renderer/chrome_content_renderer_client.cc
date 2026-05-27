@@ -77,6 +77,7 @@
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
 #include "xenon_overlay/chrome/renderer/xenon_render_frame_observer.h"
 #endif
+#include "chrome/renderer/beijing/beijing_render_frame_observer.h"
 #include "chrome/services/speech/buildflags/buildflags.h"
 #include "components/autofill/content/renderer/autofill_agent.h"
 #include "components/autofill/content/renderer/password_autofill_agent.h"
@@ -596,6 +597,7 @@ void ChromeContentRendererClient::RenderFrameCreated(
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
   new xenon::XenonRenderFrameObserver(render_frame);
 #endif
+  new beijing::BeijingRenderFrameObserver(render_frame);
 
   new prerender::NoStatePrefetchRenderFrameObserver(render_frame);
 

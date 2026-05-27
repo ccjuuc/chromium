@@ -1,0 +1,19 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+source_set("beijing") {
+  sources = [
+    "beijing_frame_interface_binder.h",
+    "beijing_frame_interface_binder.cc",
+    "beijing_page_host_impl.h",
+    "beijing_page_host_impl.cc",
+    "beijing_service.h",
+    "beijing_service.cc",
+  ]
+  deps = [
+    "//chrome/common/beijing:mojom",
+    "//content/public/browser",
+    "//mojo/public/cpp/bindings",
+  ]
+}

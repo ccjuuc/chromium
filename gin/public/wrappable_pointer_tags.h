@@ -75,7 +75,8 @@ enum WrappablePointerTag : uint16_t {
   kWebAXObjectProxy,             // content::WebAXObjectProxy
   kWrappedExceptionHandler,      // extensions::WrappedExceptionHandler
   kXenonPageApi,                 // xenon::JSXenonApi
-  kLastPointerTag = kXenonPageApi,
+  kBeijingPageApi,               // beijing::JSBeijingApi
+  kLastPointerTag = kBeijingPageApi,
 };
 
 static_assert(kLastPointerTag <

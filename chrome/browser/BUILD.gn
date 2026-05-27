@@ -1775,6 +1775,7 @@ static_library("browser") {
   ]
 
   deps = [
+    "//chrome/browser/beijing",
     ":active_use_util",
     ":browser_process",
     ":expired_flags_list",

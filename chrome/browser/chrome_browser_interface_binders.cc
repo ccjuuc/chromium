@@ -34,6 +34,7 @@
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
 #include "xenon_overlay/chrome/browser/xenon_frame_interface_binder.h"
 #endif
+#include "chrome/browser/beijing/beijing_frame_interface_binder.h"
 #include "chrome/services/speech/buildflags/buildflags.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/credential_management/content_credential_manager.h"
@@ -595,6 +596,7 @@ void PopulateChromeFrameBinders(
 #if BUILDFLAG(ENABLE_XENON_SERVICE)
   xenon::PopulateXenonFrameBinders(map);
 #endif
+  beijing::PopulateBeijingFrameBinders(map);
 }
 
 }  // namespace chrome::internal
