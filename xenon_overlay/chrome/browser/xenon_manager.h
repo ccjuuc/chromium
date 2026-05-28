@@ -51,6 +51,10 @@ class XenonManager {
   using PingCallback = base::OnceCallback<void(const std::string&)>;
   void Ping(PingCallback callback);
 
+  // Drops the Utility process connection during browser shutdown (login gate
+  // dismiss before any Browser window exists).
+  void ShutdownForProcessExit();
+
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
   void PingAssociated(PingCallback callback);
 #endif
@@ -88,6 +92,7 @@ class XenonManager {
 #endif
 
   void OnDisconnected();
+  void ResetServiceConnection();
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
   void SetupAssociatedSide();
 #endif

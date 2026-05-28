@@ -12,9 +12,10 @@
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/browser_list_observer.h"
-#include "ui/gfx/geometry/rect.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/startup/startup_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget_observer.h"
 
 class Browser;
@@ -86,9 +87,10 @@ class XenonLoginController : public BrowserListObserver {
   void LayoutLoginWidgetOverAnchorFrame();
   void ObserveAnchorFrameWidget(views::Widget* frame_widget);
   void StopAnchorFrameObservation();
-  void FinishLoginDialogClosed(bool logged_in_at_close,
-                               bool had_deferred_launch);
-  void DeferredPostLoginCloseCleanup(bool had_deferred_launch);
+  void OnLoginWidgetDestroying(views::Widget* widget);
+  void QuitAfterLoginGateDismissed();
+  void AcquireLoginGateKeepAlive();
+  void ReleaseLoginGateKeepAlive();
 
   // BrowserListObserver:
   void OnBrowserSetLastActive(Browser* browser) override;
@@ -110,6 +112,7 @@ class XenonLoginController : public BrowserListObserver {
     LoginWidgetObserver& operator=(const LoginWidgetObserver&) = delete;
 
     void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
+    void OnWidgetDestroying(views::Widget* widget) override;
 
    private:
     raw_ptr<XenonLoginController> controller_;
@@ -140,8 +143,10 @@ class XenonLoginController : public BrowserListObserver {
   bool login_ui_open_ = false;
   bool browser_list_observation_active_ = false;
   bool suppress_login_close_cleanup_ = false;
+  bool quit_after_login_widget_destroy_ = false;
   base::CallbackListSubscription closing_all_browsers_subscription_;
   base::CallbackListSubscription app_terminating_subscription_;
+  std::unique_ptr<ScopedKeepAlive> login_gate_keep_alive_;
   LoginWidgetObserver login_widget_observer_impl_;
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       login_widget_observation_;

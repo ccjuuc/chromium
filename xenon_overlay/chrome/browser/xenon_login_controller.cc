@@ -6,17 +6,22 @@
 #include "base/location.h"
 #include "base/task/current_thread.h"
 #include "build/build_config.h"
+#include "chrome/browser/background/extensions/background_mode_manager.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/headless/headless_mode_util.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/lifetime/application_lifetime_desktop.h"
-#include "chrome/browser/lifetime/browser_shutdown.h"
-#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/gfx/geometry/size.h"
@@ -24,6 +29,7 @@
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
+#include "xenon_overlay/chrome/browser/xenon_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_prefs.h"
 
 namespace xenon {
@@ -117,6 +123,11 @@ void XenonLoginController::LoginWidgetObserver::OnWidgetActivationChanged(
     views::Widget* widget,
     bool active) {
   controller_->OnLoginWidgetActivationChanged(widget, active);
+}
+
+void XenonLoginController::LoginWidgetObserver::OnWidgetDestroying(
+    views::Widget* widget) {
+  controller_->OnLoginWidgetDestroying(widget);
 }
 
 XenonLoginController::AnchorFrameWidgetObserver::AnchorFrameWidgetObserver(
@@ -355,9 +366,11 @@ void XenonLoginController::CloseLoginWidgetForProcessExit() {
   }
 
   weak_factory_.InvalidateWeakPtrs();
+  quit_after_login_widget_destroy_ = false;
   StopBrowserListObserving();
   StopAnchorFrameObservation();
   StopLoginWidgetObservation();
+  ReleaseLoginGateKeepAlive();
 
   // Close before chrome::CloseAllBrowsers tears down browsers. On Windows,
   // Reparent off the frame, use ScopedAllowApplicationTasksInNativeNestedLoop
@@ -402,66 +415,109 @@ void XenonLoginController::NotifyLoginDialogClosed() {
 
   StopAnchorFrameObservation();
   login_anchor_browser_ = nullptr;
-  StopLoginWidgetObservation();
-  login_widget_ = nullptr;
-  login_ui_open_ = false;
 
   const bool logged_in_at_close =
       login_profile_ && IsSessionLoggedIn(login_profile_);
   const bool had_deferred_launch = !pending_resume_launch_.is_null();
 
   // Logged-in close: ResumePendingLaunch() already moved the closure; do not
-  // reset here. Dismiss-without-auth: cancel deferred browser launch (blocks
-  // the main window) before leaving this callback.
+  // reset here. Dismiss-without-auth: cancel deferred browser launch.
   if (!logged_in_at_close) {
     pending_resume_launch_.Reset();
   }
 
-  if (skip_deferred_cleanup) {
-    StopBrowserListObserving();
+  if (!skip_deferred_cleanup && !logged_in_at_close && had_deferred_launch) {
+    // Quit runs from OnLoginWidgetDestroying once the Widget finishes teardown.
+    // Keep observing until then — StopLoginWidgetObservation() here would skip
+    // OnWidgetDestroying and leave the process pinned by keep-alives.
+    quit_after_login_widget_destroy_ = true;
+    login_ui_open_ = false;
     return;
   }
 
-  // One async hop: WebDialog close can still be under nested native delivery;
-  // avoid running RestoreHidden / launch follow-up synchronously from here.
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&XenonLoginController::FinishLoginDialogClosed,
-                     weak_factory_.GetWeakPtr(), logged_in_at_close,
-                     had_deferred_launch));
+  StopLoginWidgetObservation();
+  login_widget_ = nullptr;
+  login_ui_open_ = false;
+  StopBrowserListObserving();
+  if (!logged_in_at_close) {
+    RestoreHiddenBrowsers();
+  }
 }
 
-void XenonLoginController::FinishLoginDialogClosed(
-    bool logged_in_at_close,
-    bool had_deferred_launch) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (browser_shutdown::HasShutdownStarted() ||
-      browser_shutdown::IsTryingToQuit()) {
-    StopBrowserListObserving();
+void XenonLoginController::OnLoginWidgetDestroying(views::Widget* widget) {
+  if (widget != login_widget_) {
     return;
   }
+
+  const bool logged_in_at_close =
+      login_profile_ && IsSessionLoggedIn(login_profile_);
+  const bool should_quit =
+      quit_after_login_widget_destroy_ ||
+      (!logged_in_at_close && login_gate_keep_alive_);
+  quit_after_login_widget_destroy_ = false;
+
+  if (!logged_in_at_close) {
+    pending_resume_launch_.Reset();
+  }
+
+  login_widget_ = nullptr;
+  login_ui_open_ = false;
   StopBrowserListObserving();
-  if (logged_in_at_close) {
+
+  if (should_quit && !logged_in_at_close) {
+    StopLoginWidgetObservation();
+    QuitAfterLoginGateDismissed();
+    return;
+  }
+
+  StopLoginWidgetObservation();
+
+  if (!logged_in_at_close) {
+    RestoreHiddenBrowsers();
+  }
+}
+
+void XenonLoginController::QuitAfterLoginGateDismissed() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (browser_shutdown::HasShutdownStarted()) {
     return;
   }
   if (login_profile_ && IsSessionLoggedIn(login_profile_)) {
     return;
   }
-  DeferredPostLoginCloseCleanup(had_deferred_launch);
+  if (!login_gate_keep_alive_) {
+    return;
+  }
+
+  ReleaseLoginGateKeepAlive();
+
+  if (login_profile_ && g_browser_process &&
+      g_browser_process->profile_manager()) {
+    g_browser_process->profile_manager()->ClearFirstBrowserWindowKeepAlive(
+        login_profile_);
+  }
+
+  if (g_browser_process) {
+    if (BackgroundModeManager* background_mode =
+            g_browser_process->background_mode_manager()) {
+      // Component extension (service worker) may hold background-mode keep-
+      // alives before the first Browser window is created.
+      background_mode->SuspendBackgroundMode();
+    }
+  }
+
+  XenonManager::GetInstance()->ShutdownForProcessExit();
+  chrome::ExitIgnoreUnloadHandlers();
 }
 
-void XenonLoginController::DeferredPostLoginCloseCleanup(
-    bool had_deferred_launch) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (browser_shutdown::HasShutdownStarted() ||
-      browser_shutdown::IsTryingToQuit()) {
-    return;
-  }
-  RestoreHiddenBrowsers();
-  if (!had_deferred_launch) {
-    return;
-  }
-  chrome::ShutdownIfNeeded();
+void XenonLoginController::AcquireLoginGateKeepAlive() {
+  DCHECK(!login_gate_keep_alive_);
+  login_gate_keep_alive_ = std::make_unique<ScopedKeepAlive>(
+      KeepAliveOrigin::USER_MANAGER_VIEW, KeepAliveRestartOption::DISABLED);
+}
+
+void XenonLoginController::ReleaseLoginGateKeepAlive() {
+  login_gate_keep_alive_.reset();
 }
 
 void XenonLoginController::ShowLoginDialog(Profile* profile, bool is_relogin) {
@@ -530,6 +586,7 @@ void XenonLoginController::ShowLoginDialog(Profile* profile, bool is_relogin) {
 }
 
 void XenonLoginController::ResumePendingLaunch() {
+  quit_after_login_widget_destroy_ = false;
   StopBrowserListObserving();
   RestoreHiddenBrowsers();
   base::OnceClosure task;
@@ -545,9 +602,12 @@ void XenonLoginController::ResumePendingLaunch() {
     login_anchor_browser_ = nullptr;
     w->Close();
   }
+  // Launch the browser while login_gate_keep_alive_ is still held so
+  // releasing it does not Unpin the process before the first Browser exists.
   if (task) {
-    content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(task));
+    std::move(task).Run();
   }
+  ReleaseLoginGateKeepAlive();
 }
 
 bool XenonLoginController::MaybeDeferLaunchBrowserForLastProfiles(
@@ -575,6 +635,8 @@ bool XenonLoginController::MaybeDeferLaunchBrowserForLastProfiles(
     ActivateLoginWidget();
     return true;
   }
+
+  AcquireLoginGateKeepAlive();
 
   std::vector<GURL> first_run_urls = creator->first_run_tabs();
   StartupBrowserCreator::Profiles profiles_copy = last_opened_profiles;
@@ -623,6 +685,8 @@ bool XenonLoginController::MaybeDeferSingleBrowserLaunch(
     ActivateLoginWidget();
     return true;
   }
+
+  AcquireLoginGateKeepAlive();
 
   std::vector<GURL> first_run_urls = creator->first_run_tabs();
 

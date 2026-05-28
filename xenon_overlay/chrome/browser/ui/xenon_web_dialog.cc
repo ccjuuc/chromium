@@ -1,38 +1,57 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
-#include "base/functional/bind.h"
-#include "base/memory/raw_ptr.h"
-#include "ui/gfx/native_ui_types.h"
+#include <algorithm>
+#include <memory>
+
 #include "base/logging.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
 #include "content/public/browser/browser_context.h"
-#include "url/gurl.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/base/hit_test.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
+#include "url/gurl.h"
+#include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 
-#include "third_party/blink/public/mojom/frame/data_mask.mojom.h"
-#include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/navigation_handle.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "services/service_manager/public/cpp/interface_provider.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include "ui/display/win/screen_win.h"
+#endif
 
 namespace xenon {
+namespace {
 
+int ResizeBorderThickness() {
+#if BUILDFLAG(IS_WIN)
+  return display::win::GetScreenWin()->GetSystemMetricsInDIP(SM_CXSIZEFRAME);
+#else
+  return 8;
+#endif
+}
 
-// A custom WebDialogView that supports CSS drag regions (-webkit-app-region: drag).
+bool CanResizeFrame(const views::Widget* widget) {
+  return widget && widget->widget_delegate() &&
+         widget->widget_delegate()->CanResize() && !widget->IsMaximized() &&
+         !widget->IsFullscreen();
+}
+
+bool IsInResizeBorder(const gfx::Point& point, const gfx::Size& size) {
+  const int border = ResizeBorderThickness();
+  return point.x() < border || point.y() < border ||
+         point.x() >= size.width() - border ||
+         point.y() >= size.height() - border;
+}
+
+// Frameless WebDialogView: -webkit-app-region drag + edge resize.
 class XenonWebDialogView : public views::WebDialogView {
  public:
   XenonWebDialogView(content::BrowserContext* context,
@@ -41,7 +60,6 @@ class XenonWebDialogView : public views::WebDialogView {
       : views::WebDialogView(context, delegate, std::move(handler)) {}
   ~XenonWebDialogView() override = default;
 
-  // content::WebContentsDelegate:
   void DraggableRegionsChanged(
       const std::vector<blink::mojom::DraggableRegionPtr>& regions,
       content::WebContents* contents) override {
@@ -53,7 +71,13 @@ class XenonWebDialogView : public views::WebDialogView {
     }
   }
 
-  // views::ClientView:
+  void AddedToWidget() override {
+    views::WebDialogView::AddedToWidget();
+    if (web_contents()) {
+      web_contents()->SetSupportsDraggableRegions(true);
+    }
+  }
+
   int NonClientHitTest(const gfx::Point& point) override {
     if (draggable_region_ &&
         draggable_region_->contains(point.x(), point.y())) {
@@ -62,27 +86,21 @@ class XenonWebDialogView : public views::WebDialogView {
     return views::WebDialogView::NonClientHitTest(point);
   }
 
-  // views::View:
-  void AddedToWidget() override {
-    views::WebDialogView::AddedToWidget();
-    if (web_contents()) {
-      web_contents()->SetSupportsDraggableRegions(true);
-    }
-  }
-
   views::ClientView* CreateClientView(views::Widget* widget) override {
     return this;
   }
 
   std::unique_ptr<views::FrameView> CreateFrameView(
       views::Widget* widget) override {
-    return std::make_unique<EmptyFrameView>();
+    return std::make_unique<FrameView>();
   }
 
   bool ShouldDescendIntoChildForEventHandling(
       gfx::NativeView child,
       const gfx::Point& location) override {
-    // Prevent WebView from consuming mouse events in draggable regions.
+    if (CanResizeFrame(GetWidget()) && IsInResizeBorder(location, size())) {
+      return false;
+    }
     if (draggable_region_ &&
         draggable_region_->contains(location.x(), location.y())) {
       return false;
@@ -92,14 +110,8 @@ class XenonWebDialogView : public views::WebDialogView {
   }
 
  private:
-  std::unique_ptr<SkRegion> draggable_region_;
-
-  // A minimal FrameView that delegates hit testing to the ClientView.
-  class EmptyFrameView : public views::FrameView {
+  class FrameView : public views::FrameView {
    public:
-    EmptyFrameView() = default;
-    ~EmptyFrameView() override = default;
-
     gfx::Rect GetBoundsForClientView() const override { return bounds(); }
 
     gfx::Rect GetWindowBoundsForClientBounds(
@@ -109,24 +121,33 @@ class XenonWebDialogView : public views::WebDialogView {
 
     int NonClientHitTest(const gfx::Point& point) override {
       views::Widget* widget = GetWidget();
-      if (widget && widget->client_view()) {
-        gfx::Point point_in_client = point;
-        gfx::Rect client_bounds = GetBoundsForClientView();
-        point_in_client.Offset(-client_bounds.x(), -client_bounds.y());
-        return widget->client_view()->NonClientHitTest(point_in_client);
+      if (!widget || !bounds().Contains(point)) {
+        return HTNOWHERE;
+      }
+      if (CanResizeFrame(widget)) {
+        const int border = ResizeBorderThickness();
+        const int corner = std::max(0, 16 - border);
+        const int hit = GetHTComponentForFrame(
+            point, gfx::Insets(border), corner, corner, true);
+        if (hit != HTNOWHERE) {
+          return hit;
+        }
+      }
+      if (views::ClientView* client = widget->client_view()) {
+        gfx::Point p = point;
+        const gfx::Rect client_bounds = GetBoundsForClientView();
+        p.Offset(-client_bounds.x(), -client_bounds.y());
+        return client->NonClientHitTest(p);
       }
       return HTNOWHERE;
     }
-
-    void GetWindowMask(const gfx::Size& size, SkPath* window_mask) override {}
-    void ResetWindowControls() override {}
-    void UpdateWindowIcon() override {}
-    void UpdateWindowTitle() override {}
-    void SizeConstraintsChanged() override {}
   };
+
+  std::unique_ptr<SkRegion> draggable_region_;
 };
 
-// static
+}  // namespace
+
 void XenonWebDialog::Show(content::BrowserContext* context,
                           const GURL& url,
                           int width,
@@ -137,17 +158,16 @@ void XenonWebDialog::Show(content::BrowserContext* context,
                base::OnceClosure(), /*show_close_button=*/false);
 }
 
-// static
 void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
-                                    const GURL& url,
-                                    int width,
-                                    int height,
-                                    const std::u16string& title,
-                                    raw_ptr<views::Widget>* out_widget,
-                                    gfx::NativeView parent,
-                                    ui::mojom::ModalType modal_type,
-                                    base::OnceClosure on_dialog_closed,
-                                    bool show_close_button) {
+                                  const GURL& url,
+                                  int width,
+                                  int height,
+                                  const std::u16string& title,
+                                  raw_ptr<views::Widget>* out_widget,
+                                  gfx::NativeView parent,
+                                  ui::mojom::ModalType modal_type,
+                                  base::OnceClosure on_dialog_closed,
+                                  bool show_close_button) {
   auto* delegate =
       new XenonWebDialog(url, width, height, title, modal_type,
                          std::move(on_dialog_closed), show_close_button);
@@ -155,7 +175,6 @@ void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
   views::Widget* widget = new views::Widget;
   views::Widget::InitParams params(
       views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
-
   params.delegate = new XenonWebDialogView(
       context, delegate, std::make_unique<ChromeWebContentsHandler>());
   params.remove_standard_frame = true;
@@ -163,35 +182,30 @@ void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
   params.parent = parent;
 
   widget->Init(std::move(params));
+  // TYPE_WINDOW + CanResize() keeps WS_CAPTION/WS_THICKFRAME on Windows via
+  // HWNDMessageHandler::SizeConstraintsChanged(); no manual WS_CAPTION needed.
   widget->Show();
   if (out_widget) {
     *out_widget = widget;
   }
 }
 
-// static
 GURL XenonWebDialog::GetXenonOverlayWebUIUrl() {
   return GURL("chrome://xenon-overlay/");
 }
 
-// static
 GURL XenonWebDialog::GetXenonLoginWebUIUrl() {
   return GURL("chrome://xenon-login/");
 }
 
-// static
 void XenonWebDialog::ShowXenonOverlay(Profile* profile) {
   Show(profile, GetXenonOverlayWebUIUrl(), 800, 600, u"Xenon Overlay");
 }
 
-// static
 void XenonWebDialog::ShowDataMaskTest(Profile* profile) {
-  // Global datamask policy is injected via xenon::RenderFrameHostDataMaskApplyPolicy.
-  // No additional Activator needed.
   LOG(INFO) << "DataMask test enabled from XenonWebDialog (Rule injected natively).";
 }
 
-// static
 void XenonWebDialog::OpenComponentExtensionWindow(Profile* profile) {
   if (!profile) {
     LOG(WARNING) << "OpenComponentExtensionWindow: no profile";
@@ -222,7 +236,9 @@ XenonWebDialog::XenonWebDialog(const GURL& url,
       title_(title),
       modal_type_(modal_type),
       on_dialog_closed_(std::move(on_dialog_closed)),
-      show_close_button_(show_close_button) {}
+      show_close_button_(show_close_button) {
+  set_can_resize(true);
+}
 
 XenonWebDialog::~XenonWebDialog() = default;
 

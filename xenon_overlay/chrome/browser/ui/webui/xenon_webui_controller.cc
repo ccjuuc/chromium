@@ -8,8 +8,8 @@
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_browser_interface_broker_registry.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -82,16 +82,9 @@ class XenonLoginWebUIMessageHandler : public content::WebUIMessageHandler {
     if (!contents) {
       return;
     }
-    base::WeakPtr<content::WebContents> weak_contents = contents->GetWeakPtr();
-    content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            [](base::WeakPtr<content::WebContents> wc) {
-              if (wc) {
-                wc->ClosePage();
-              }
-            },
-            weak_contents));
+    if (content::WebContentsDelegate* delegate = contents->GetDelegate()) {
+      delegate->CloseContents(contents);
+    }
   }
 };
 

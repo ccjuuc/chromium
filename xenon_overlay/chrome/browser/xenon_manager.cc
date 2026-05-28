@@ -120,18 +120,31 @@ void XenonManager::OnServiceEvent(const std::string& message) {
 }
 #endif
 
-void XenonManager::OnDisconnected() {
-  LOG(WARNING) << "Xenon Service disconnected / crashed. Resetting state.";
+void XenonManager::ResetServiceConnection() {
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
   associated_side_remote_.reset();
 #endif
 #if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
-  if (observer_event_test_callback_) {
-    std::move(observer_event_test_callback_).Run("");
-  }
   browser_observer_receiver_.reset();
 #endif
   service_remote_.reset();
+}
+
+void XenonManager::OnDisconnected() {
+  LOG(WARNING) << "Xenon Service disconnected / crashed. Resetting state.";
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+  if (observer_event_test_callback_) {
+    std::move(observer_event_test_callback_).Run("");
+  }
+#endif
+  ResetServiceConnection();
+}
+
+void XenonManager::ShutdownForProcessExit() {
+  if (!service_remote_.is_bound()) {
+    return;
+  }
+  ResetServiceConnection();
 }
 
 #if BUILDFLAG(ENABLE_XENON_ASSOCIATED_SIDE)
