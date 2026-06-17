@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Xenon UI 测试页面 (xenon-ui)</title>
+  <link rel="stylesheet" href="chrome://resources/css/text_defaults_md.css">
+  <link rel="stylesheet" href="xenon_ui.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="logo">XE</div>
+      <div class="header-info">
+        <h1>Xenon UI 功能测试页面</h1>
+        <p class="subtitle">用于调试和触发通用原生弹窗 (XenonCommonDialog) 能力</p>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <!-- Configuration Panel -->
+      <section class="card config-card">
+        <h2 class="card-title">弹窗参数配置</h2>
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="dialog-style">弹窗尺寸风格 (Style)</label>
+            <select id="dialog-style">
+              <option value="small">Small (340px 宽度)</option>
+              <option value="medium" selected>Medium (450px 宽度)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="dialog-title">标题 (Title)</label>
+            <input type="text" id="dialog-title" value="测试通用原生弹窗">
+          </div>
+
+          <div class="form-group full-width">
+            <label for="dialog-body">内容文本 (Body Text, 支持换行)</label>
+            <textarea id="dialog-body" rows="3">这是一个通用的普通原生弹窗。您可以在此配置各种选项，以测试弹窗的布局、样式和蒙层表现。</textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="dialog-checkbox-text">复选框文案 (Checkbox Text, 为空则隐藏)</label>
+            <input type="text" id="dialog-checkbox-text" value="不再提示此信息">
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="dialog-checkbox-checked" checked>
+              <span class="switch-label">复选框默认勾选 (Checked)</span>
+            </label>
+          </div>
+
+          <div class="form-group">
+            <label for="dialog-confirm-text">确认按钮文本 (Confirm Button Text)</label>
+            <input type="text" id="dialog-confirm-text" value="确定">
+          </div>
+
+          <div class="form-group">
+            <label for="dialog-cancel-text">取消按钮文本 (Cancel Button Text)</label>
+            <input type="text" id="dialog-cancel-text" value="取消">
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="dialog-show-mask" checked>
+              <span class="switch-label">显示遮罩/蒙层 (Show Mask/Modal)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="action-bar">
+          <button id="btn-show" class="btn btn-primary">触发弹窗 (Show Dialog)</button>
+        </div>
+      </section>
+
+      <!-- Web Dialog Panel -->
+      <section class="card web-card">
+        <h2 class="card-title">Web 弹窗配置 (XenonWebDialog)</h2>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label for="web-dialog-url">页面地址 (URL)</label>
+            <input type="text" id="web-dialog-url" value="chrome://simple-webui/">
+          </div>
+
+          <div class="form-group">
+            <label for="web-dialog-title">标题 (Title)</label>
+            <input type="text" id="web-dialog-title" value="Xenon 浏览器">
+          </div>
+
+          <div class="form-group">
+            <label for="web-dialog-width">宽度 (Width, 0=自适应)</label>
+            <input type="number" id="web-dialog-width" value="800" min="0">
+          </div>
+
+          <div class="form-group">
+            <label for="web-dialog-height">高度 (Height, 0=自适应)</label>
+            <input type="number" id="web-dialog-height" value="600" min="0">
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="web-dialog-modal" checked>
+              <span class="switch-label">模态/置于父窗口之上 (Modal)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="action-bar">
+          <button id="btn-show-web" class="btn btn-primary">触发 Web 弹窗 (Show Web Dialog)</button>
+        </div>
+      </section>
+
+      <!-- Shadow Test Panel -->
+      <section class="card shadow-card">
+        <h2 class="card-title">阴影测试 (Shadow Test)</h2>
+        <div class="form-group checkbox-group" style="margin-bottom: 16px; justify-content: flex-start;">
+          <label class="switch-container">
+            <input type="checkbox" id="shadow-show-backdrop" checked>
+            <span class="switch-label">显示绿色背景蒙层 (Show Green Backdrop Mask)</span>
+          </label>
+        </div>
+        <div class="shadow-test-grid">
+          <div class="shadow-type-row">
+            <span class="shadow-type-name">Default Shadow (kDefault)</span>
+            <button id="btn-shadow-default-std" class="btn btn-secondary btn-sm">标准窗口</button>
+            <button id="btn-shadow-default-borderless" class="btn btn-secondary btn-sm">无边框</button>
+          </div>
+          <div class="shadow-type-row">
+            <span class="shadow-type-name">No Shadow (kNone)</span>
+            <button id="btn-shadow-none-std" class="btn btn-secondary btn-sm">标准窗口</button>
+            <button id="btn-shadow-none-borderless" class="btn btn-secondary btn-sm">无边框</button>
+          </div>
+          <div class="shadow-type-row">
+            <span class="shadow-type-name">Drop Shadow (kDrop)</span>
+            <button id="btn-shadow-drop-std" class="btn btn-secondary btn-sm">标准窗口</button>
+            <button id="btn-shadow-drop-borderless" class="btn btn-secondary btn-sm">无边框</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Xenon Extension Panel -->
+      <section class="card extension-card">
+        <h2 class="card-title">扩展调试 (Xenon Extension)</h2>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <p>展示内置组件扩展 (Xenon Overlay Extension)。</p>
+          </div>
+        </div>
+        <div class="action-bar">
+          <button id="btn-show-extension" class="btn btn-primary">打开组件扩展 (Show Extension)</button>
+        </div>
+      </section>
+
+      <!-- Logs / Results Panel -->
+      <section class="card log-card">
+        <div class="log-header">
+          <h2 class="card-title">回调事件日志 (Dialog Callback Logs)</h2>
+          <button id="btn-clear-logs" class="btn btn-secondary btn-sm">清空日志</button>
+        </div>
+        <div id="log-list" class="log-list">
+          <div class="log-item empty-state">暂无日志，点击“触发弹窗”进行测试</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="xenon_ui.js"></script>
+</body>
+</html>

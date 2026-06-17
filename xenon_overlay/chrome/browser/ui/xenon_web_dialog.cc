@@ -3,7 +3,11 @@
 #include <algorithm>
 #include <memory>
 
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
@@ -12,9 +16,16 @@
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/base/hit_test.h"
+#include "ui/compositor/layer.h"
+#include "ui/compositor_extra/shadow.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/native_ui_types.h"
+#include "ui/gfx/shadow_value.h"
+#include "ui/views/animation/animation_builder.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view.h"
@@ -24,11 +35,58 @@
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 
+#include <dwmapi.h>
+
+#include "base/win/windows_version.h"
 #include "ui/display/win/screen_win.h"
+#include "ui/views/win/hwnd_util.h"
 #endif
 
 namespace xenon {
 namespace {
+
+constexpr int kDialogCornerRadius = 16;
+constexpr int kFramelessCompositorShadowElevation = 8;
+
+#if BUILDFLAG(IS_WIN)
+bool IsWin11OrLater() {
+  return base::win::GetVersion() >= base::win::Version::WIN11;
+}
+
+bool UseFramelessCompositorShadow() {
+  return !IsWin11OrLater();
+}
+
+int FramelessCompositorShadowMargin() {
+  static const int margin = [] {
+    const gfx::ShadowValues values = gfx::ShadowValue::MakeMdShadowValues(
+        kFramelessCompositorShadowElevation);
+    const gfx::Insets insets = gfx::ShadowValue::GetMargin(values);
+    return std::max(
+        {-insets.left(), -insets.top(), -insets.right(), -insets.bottom()});
+  }();
+  return margin;
+}
+#else
+bool IsWin11OrLater() {
+  return false;
+}
+
+bool UseFramelessCompositorShadow() {
+  return false;
+}
+
+int FramelessCompositorShadowMargin() {
+  return 0;
+}
+#endif
+
+void EnlargeForFramelessCompositorShadow(gfx::Size* size) {
+  if (UseFramelessCompositorShadow()) {
+    const int margin = FramelessCompositorShadowMargin();
+    size->Enlarge(2 * margin, 2 * margin);
+  }
+}
 
 int ResizeBorderThickness() {
 #if BUILDFLAG(IS_WIN)
@@ -65,17 +123,27 @@ class XenonWebDialogView : public views::WebDialogView {
       content::WebContents* contents) override {
     draggable_region_ = std::make_unique<SkRegion>();
     for (const auto& region : regions) {
-      draggable_region_->op(gfx::RectToSkIRect(region->bounds),
-                            region->draggable ? SkRegion::kUnion_Op
-                                              : SkRegion::kDifference_Op);
+      draggable_region_->op(
+          gfx::RectToSkIRect(region->bounds),
+          region->draggable ? SkRegion::kUnion_Op : SkRegion::kDifference_Op);
     }
   }
 
   void AddedToWidget() override {
     views::WebDialogView::AddedToWidget();
-    if (web_contents()) {
-      web_contents()->SetSupportsDraggableRegions(true);
-    }
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&XenonWebDialogView::FinishAddedToWidget,
+                                  weak_ptr_factory_.GetWeakPtr()));
+  }
+
+  void OnThemeChanged() override {
+    views::WebDialogView::OnThemeChanged();
+    SetBackground(nullptr);
+  }
+
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override {
+    views::WebDialogView::OnBoundsChanged(previous_bounds);
+    UpdateFramelessCompositorShadowBounds();
   }
 
   int NonClientHitTest(const gfx::Point& point) override {
@@ -110,6 +178,83 @@ class XenonWebDialogView : public views::WebDialogView {
   }
 
  private:
+  void FinishAddedToWidget() {
+    if (!GetWidget()) {
+      return;
+    }
+
+    SetBackground(nullptr);
+    SetPaintToLayer();
+    layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(kDialogCornerRadius));
+    layer()->SetFillsBoundsOpaquely(false);
+#if BUILDFLAG(IS_WIN)
+    if (UseFramelessCompositorShadow()) {
+      SetWebViewCornersRadii(gfx::RoundedCornersF(kDialogCornerRadius));
+      SetupFramelessCompositorShadow();
+    } else {
+      RemoveDwmBorder();
+    }
+#endif
+
+    if (web_contents()) {
+      web_contents()->SetSupportsDraggableRegions(true);
+    }
+
+    ui::Layer* widget_layer = GetWidget()->GetLayer();
+    if (!widget_layer) {
+      return;
+    }
+    widget_layer->SetOpacity(0.0f);
+    gfx::Transform transform;
+    transform.Translate(0, -10);
+    widget_layer->SetTransform(transform);
+
+    views::AnimationBuilder()
+        .Once()
+        .SetDuration(base::Milliseconds(150))
+        .SetOpacity(widget_layer, 1.0f, gfx::Tween::EASE_OUT)
+        .SetTransform(widget_layer, gfx::Transform(), gfx::Tween::EASE_OUT);
+  }
+
+  void RemoveDwmBorder() {
+#if BUILDFLAG(IS_WIN)
+    views::Widget* widget = GetWidget();
+    if (!widget) {
+      return;
+    }
+    HWND hwnd = views::HWNDForNativeWindow(widget->GetNativeWindow());
+    if (!hwnd) {
+      return;
+    }
+    constexpr DWORD kDwmwaBorderColor = 34;
+    constexpr COLORREF kDwmColorNone = 0xFFFFFFFE;
+    COLORREF border_color = kDwmColorNone;
+    ::DwmSetWindowAttribute(hwnd, kDwmwaBorderColor, &border_color,
+                            sizeof(border_color));
+#endif
+  }
+
+  void SetupFramelessCompositorShadow() {
+    const int margin = FramelessCompositorShadowMargin();
+    SetBorder(views::CreateEmptyBorder(gfx::Insets(margin)));
+
+    compositor_shadow_ = std::make_unique<ui::Shadow>();
+    compositor_shadow_->Init(kFramelessCompositorShadowElevation);
+    compositor_shadow_->SetRoundedCornerRadius(kDialogCornerRadius);
+    AddLayerToRegion(compositor_shadow_->layer(), views::LayerRegion::kBelow);
+    UpdateFramelessCompositorShadowBounds();
+  }
+
+  void UpdateFramelessCompositorShadowBounds() {
+    if (!compositor_shadow_) {
+      return;
+    }
+    const int margin = FramelessCompositorShadowMargin();
+    compositor_shadow_->SetContentBounds(
+        gfx::Rect(margin, margin, std::max(0, width() - 2 * margin),
+                  std::max(0, height() - 2 * margin)));
+  }
+
   class FrameView : public views::FrameView {
    public:
     gfx::Rect GetBoundsForClientView() const override { return bounds(); }
@@ -127,8 +272,8 @@ class XenonWebDialogView : public views::WebDialogView {
       if (CanResizeFrame(widget)) {
         const int border = ResizeBorderThickness();
         const int corner = std::max(0, 16 - border);
-        const int hit = GetHTComponentForFrame(
-            point, gfx::Insets(border), corner, corner, true);
+        const int hit = GetHTComponentForFrame(point, gfx::Insets(border),
+                                               corner, corner, true);
         if (hit != HTNOWHERE) {
           return hit;
         }
@@ -144,6 +289,8 @@ class XenonWebDialogView : public views::WebDialogView {
   };
 
   std::unique_ptr<SkRegion> draggable_region_;
+  std::unique_ptr<ui::Shadow> compositor_shadow_;
+  base::WeakPtrFactory<XenonWebDialogView> weak_ptr_factory_{this};
 };
 
 }  // namespace
@@ -180,6 +327,14 @@ void XenonWebDialog::ShowForLogin(content::BrowserContext* context,
   params.remove_standard_frame = true;
   params.type = views::Widget::InitParams::TYPE_WINDOW;
   params.parent = parent;
+  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
+#if BUILDFLAG(IS_WIN)
+  if (IsWin11OrLater()) {
+    params.rounded_corners = gfx::RoundedCornersF(kDialogCornerRadius);
+  }
+#else
+  params.rounded_corners = gfx::RoundedCornersF(kDialogCornerRadius);
+#endif
 
   widget->Init(std::move(params));
   // TYPE_WINDOW + CanResize() keeps WS_CAPTION/WS_THICKFRAME on Windows via
@@ -203,7 +358,8 @@ void XenonWebDialog::ShowXenonOverlay(Profile* profile) {
 }
 
 void XenonWebDialog::ShowDataMaskTest(Profile* profile) {
-  LOG(INFO) << "DataMask test enabled from XenonWebDialog (Rule injected natively).";
+  LOG(INFO)
+      << "DataMask test enabled from XenonWebDialog (Rule injected natively).";
 }
 
 void XenonWebDialog::OpenComponentExtensionWindow(Profile* profile) {
@@ -259,6 +415,7 @@ void XenonWebDialog::GetWebUIMessageHandlers(
 
 void XenonWebDialog::GetDialogSize(gfx::Size* size) const {
   size->SetSize(width_, height_);
+  EnlargeForFramelessCompositorShadow(size);
 }
 
 std::string XenonWebDialog::GetDialogArgs() const {

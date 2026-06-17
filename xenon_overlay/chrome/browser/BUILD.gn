@@ -1,3 +1,4 @@
+import("//build/config/ui.gni")
 import("//third_party/skia/modules/svg/svg.gni")
 import("//xenon_overlay/buildflags/features.gni")
 
@@ -30,6 +31,30 @@ source_set("xenon_common_bubble") {
   ]
 }
 
+source_set("xenon_common_dialog") {
+  sources = [
+    "ui/xenon_common_dialog.cc",
+    "ui/xenon_common_dialog.h",
+  ]
+
+  deps = [
+    "//base",
+    "//cc/paint",
+    "//chrome/browser/ui",
+    "//components/constrained_window",
+    "//components/strings",
+    "//components/vector_icons",
+    "//ui/base",
+    "//ui/base:types",
+    "//ui/base/mojom:ui_base_types",
+    "//ui/color",
+    "//ui/compositor",
+    "//ui/compositor_extra",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
 source_set("browser") {
   defines = []
   sources = [
@@ -46,10 +71,14 @@ source_set("browser") {
     "ui/webui/video_sniffer_webui_controller.h",
     "ui/webui/xenon_page_handler.cc",
     "ui/webui/xenon_page_handler.h",
+    "ui/webui/xenon_ui_controller.cc",
+    "ui/webui/xenon_ui_controller.h",
     "ui/webui/xenon_webui_controller.cc",
     "ui/webui/xenon_webui_controller.h",
     "ui/webui/xenon_webui_dev_proxy.cc",
     "ui/webui/xenon_webui_dev_proxy.h",
+    "ui/xenon_frameless_shadow_view.cc",
+    "ui/xenon_frameless_shadow_view.h",
     "ui/xenon_reminder_browser_observer.cc",
     "ui/xenon_reminder_browser_observer.h",
     "ui/xenon_reminder_card_webview.cc",
@@ -60,6 +89,8 @@ source_set("browser") {
     "ui/xenon_reminder_notification_group.h",
     "ui/xenon_reminder_notification_widget.cc",
     "ui/xenon_reminder_notification_widget.h",
+    "ui/xenon_shadow_test_window.cc",
+    "ui/xenon_shadow_test_window.h",
     "ui/xenon_tip_bar_widget.cc",
     "ui/xenon_tip_bar_widget.h",
     "ui/xenon_web_dialog.cc",
@@ -83,6 +114,7 @@ source_set("browser") {
   ]
 
   deps = [
+    ":xenon_common_dialog",
     ":xenon_prefs",
     "//base",
     "//chrome/browser:browser_process",
@@ -95,16 +127,17 @@ source_set("browser") {
     "//components/services/unzip/content",
     "//components/services/unzip/public/cpp",
     "//content/public/browser",
-    "//net",
     "//extensions/browser",
     "//extensions/common",
     "//mojo/public/cpp/bindings",
+    "//net",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//skia",
     "//third_party/expat",
     "//ui/base",
     "//ui/compositor",
+    "//ui/compositor_extra",
     "//ui/display",
     "//ui/gfx",
     "//ui/views",
@@ -121,6 +154,10 @@ source_set("browser") {
       "//chrome/browser/ui/toolbar/pinned_toolbar:impl",
       "//xenon_overlay/chrome/browser/xenon_ai",
     ]
+  }
+
+  if (use_aura) {
+    deps += [ "//ui/wm" ]
   }
 }
 

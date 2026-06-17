@@ -36,6 +36,11 @@
       <include name="IDR_VIDEO_SNIFFER_WEBUI_INDEX_CSS" file="webui/video_sniffer/index.css" type="BINDATA" />
       <include name="IDR_VIDEO_SNIFFER_WEBUI_INDEX_JS" file="webui/video_sniffer/index.js" type="BINDATA" />
 
+      <!-- Xenon UI Test Page -->
+      <include name="IDR_XENON_UI_HTML" file="webui/xenon_ui/xenon_ui.html" type="BINDATA" />
+      <include name="IDR_XENON_UI_CSS" file="webui/xenon_ui/xenon_ui.css" type="BINDATA" />
+      <include name="IDR_XENON_UI_JS" file="webui/xenon_ui/xenon_ui.js" type="BINDATA" />
+
       <include name="IDR_XENON_AI_SIDE_PANEL_HTML" file="webui/xenon_ai_side_panel/xenon_ai_side_panel.html" type="BINDATA" />
       <include name="IDR_XENON_AI_SIDE_PANEL_JS" file="webui/xenon_ai_side_panel/xenon_ai_side_panel.js" type="BINDATA" />
       <include name="IDR_XENON_AI_MOJOM_WEBUI_JS" file="${root_gen_dir}/xenon_overlay/resources/webui/tsc/xenon/xenon_ai.mojom-webui.js" use_base_dir="false" type="BINDATA" />
