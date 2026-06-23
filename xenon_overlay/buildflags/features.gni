@@ -3,6 +3,8 @@
 # found in the LICENSE file.
 
 declare_args() {
+  for_xl = true
+
   # Xenon Overlay Service is enabled on Windows, Linux, and Mac.
   # ChromeOS and Android are not currently supported targets for this overlay.
   enable_xenon_service = is_win || is_linux || is_mac

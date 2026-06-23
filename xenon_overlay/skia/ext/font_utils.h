@@ -39,8 +39,6 @@ using GetCustomFontCallback = sk_sp<SkTypeface> (*)(const char* name,
                                                    SkFontStyle style);
 SK_API void SetGetCustomFontCallback(GetCustomFontCallback callback);
 
-SK_API void InitializeFontRendering();
-
 }  // namespace skia
 
 #endif  // SKIA_EXT_FONT_UTILS_H_

@@ -13,7 +13,7 @@
       <div class="logo">XE</div>
       <div class="header-info">
         <h1>Xenon UI 功能测试页面</h1>
-        <p class="subtitle">用于调试和触发通用原生弹窗 (XenonCommonDialog) 能力</p>
+        <p class="subtitle">用于调试和触发通用原生弹窗 (XenonCommonDialog) 与 Toast (XenonToast) 能力</p>
       </div>
     </header>
 
@@ -150,6 +150,43 @@
         </div>
         <div class="action-bar">
           <button id="btn-show-extension" class="btn btn-primary">打开组件扩展 (Show Extension)</button>
+        </div>
+      </section>
+
+      <!-- Toast Panel -->
+      <section class="card toast-card">
+        <h2 class="card-title">原生 Toast (XenonToast)</h2>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label for="toast-text">提示文案 (Text)</label>
+            <input type="text" id="toast-text" value="操作已完成">
+          </div>
+
+          <div class="form-group">
+            <label for="toast-type">类型 (Type)</label>
+            <select id="toast-type">
+              <option value="success">Success</option>
+              <option value="info" selected>Info</option>
+              <option value="error">Error</option>
+              <option value="warning">Warning</option>
+              <option value="loading">Loading</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="toast-duration">显示时长 ms (0=默认)</label>
+            <input type="number" id="toast-duration" value="0" min="0">
+          </div>
+
+          <div class="form-group">
+            <label for="toast-action-text">操作按钮文案 (Action, 为空则隐藏)</label>
+            <input type="text" id="toast-action-text" value="撤销">
+          </div>
+        </div>
+
+        <div class="action-bar toast-action-bar">
+          <button id="btn-show-toast" class="btn btn-primary">显示 Toast</button>
+          <button id="btn-toast-loading-success" class="btn btn-secondary">Loading → Success</button>
         </div>
       </section>
 

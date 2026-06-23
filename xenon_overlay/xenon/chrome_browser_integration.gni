@@ -1,0 +1,13 @@
+# Copyright 2026 The Xunlei Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+xenon_chrome_browser_integration_sources = []
+
+xenon_chrome_browser_integration_deps = [
+  "//xenon_overlay/xenon/chrome/browser/fonts:fonts",
+]
+
+xenon_chrome_browser_integration_data_deps = [
+  "//xenon_overlay/xenon/chrome/browser/fonts:copy_fonts",
+]

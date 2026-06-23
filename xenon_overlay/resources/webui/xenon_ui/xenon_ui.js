@@ -38,6 +38,26 @@ document.addEventListener('DOMContentLoaded', () => {
     addLog(`[C++ -> WebUI] 收到结果反馈: 用户点击确定 = ${accepted}, 复选框勾选状态 = ${checkboxChecked}`);
   });
 
+  addWebUiListener('toast-action', () => {
+    addLog('[C++ -> WebUI] Toast 操作按钮被点击');
+  });
+
+  function buildToastOptions(overrides = {}) {
+    return {
+      type: overrides.type ?? document.getElementById('toast-type').value,
+      text: overrides.text ?? document.getElementById('toast-text').value,
+      action_text: overrides.action_text ??
+          document.getElementById('toast-action-text').value,
+      duration_ms: overrides.duration_ms ??
+          (parseInt(document.getElementById('toast-duration').value, 10) || 0),
+    };
+  }
+
+  function sendShowToast(options) {
+    addLog(`[WebUI -> C++] 发送请求 'showToast', 参数: ${JSON.stringify(options)}`);
+    chrome.send('showToast', [options]);
+  }
+
   const btnShow = document.getElementById('btn-show');
   if (btnShow) {
     btnShow.addEventListener('click', () => {
@@ -110,6 +130,33 @@ document.addEventListener('DOMContentLoaded', () => {
     btnShowExtension.addEventListener('click', () => {
       addLog(`[WebUI -> C++] 发送请求 'showExtension'`);
       chrome.send('showExtension');
+    });
+  }
+
+  const btnShowToast = document.getElementById('btn-show-toast');
+  if (btnShowToast) {
+    btnShowToast.addEventListener('click', () => {
+      sendShowToast(buildToastOptions());
+    });
+  }
+
+  const btnToastLoadingSuccess = document.getElementById('btn-toast-loading-success');
+  if (btnToastLoadingSuccess) {
+    btnToastLoadingSuccess.addEventListener('click', () => {
+      sendShowToast({
+        type: 'loading',
+        text: '正在处理…',
+        action_text: '',
+        duration_ms: 0,
+      });
+      window.setTimeout(() => {
+        sendShowToast({
+          type: 'success',
+          text: '处理完成',
+          action_text: '',
+          duration_ms: 3000,
+        });
+      }, 1200);
     });
   }
 

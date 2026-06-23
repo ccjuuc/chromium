@@ -16,12 +16,29 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_common_dialog.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_shadow_test_window.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
+#include "xenon_overlay/xenon/chrome/browser/ui/views/xenon_toast.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
 
 namespace xenon {
 
 namespace {
 constexpr char kHost[] = "xenon-ui";
+
+xunlei::XenonToast::Type ToastTypeFromString(const std::string& type) {
+  if (type == "success") {
+    return xunlei::XenonToast::Type::kSuccess;
+  }
+  if (type == "error") {
+    return xunlei::XenonToast::Type::kError;
+  }
+  if (type == "warning") {
+    return xunlei::XenonToast::Type::kWarning;
+  }
+  if (type == "loading") {
+    return xunlei::XenonToast::Type::kLoading;
+  }
+  return xunlei::XenonToast::Type::kInfo;
+}
 
 class XenonUIMessageHandler : public content::WebUIMessageHandler {
  public:
@@ -65,6 +82,11 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler {
         base::BindRepeating(
             &XenonUIMessageHandler::HandleShowViewShadowTestWindow,
             base::Unretained(this)));
+
+    web_ui()->RegisterMessageCallback(
+        "showToast",
+        base::BindRepeating(&XenonUIMessageHandler::HandleShowToast,
+                            base::Unretained(this)));
   }
 
   void HandleShowExtension(const base::Value::List& args) {
@@ -185,9 +207,50 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler {
         base::OnceClosure(), /*show_close_button=*/true);
   }
 
+  void HandleShowToast(const base::Value::List& args) {
+    AllowJavascript();
+
+    if (args.empty() || !args[0].is_dict()) {
+      return;
+    }
+    const base::Value::Dict& options = args[0].GetDict();
+
+    content::WebContents* web_contents = web_ui()->GetWebContents();
+    if (!web_contents) {
+      return;
+    }
+
+    xunlei::XenonToast::Params params;
+    if (const std::string* type = options.FindString("type")) {
+      params.type = ToastTypeFromString(*type);
+    }
+    if (const std::string* text = options.FindString("text")) {
+      params.text = base::UTF8ToUTF16(*text);
+    }
+    if (const std::string* action_text = options.FindString("action_text")) {
+      params.action_text = base::UTF8ToUTF16(*action_text);
+    }
+    if (const std::optional<int> duration_ms = options.FindInt("duration_ms")) {
+      if (*duration_ms > 0) {
+        params.duration = base::Milliseconds(*duration_ms);
+      }
+    }
+    if (!params.action_text.empty()) {
+      params.action_callback = base::BindOnce(
+          &XenonUIMessageHandler::OnToastAction, weak_ptr_factory_.GetWeakPtr());
+    }
+
+    xunlei::XenonToast::Show(web_contents->GetTopLevelNativeWindow(),
+                             std::move(params));
+  }
+
   void OnDialogResult(const XenonCommonDialog::Result& result) {
     FireWebUIListener("dialog-result", base::Value(result.accepted),
                       base::Value(result.checkbox_checked));
+  }
+
+  void OnToastAction() {
+    FireWebUIListener("toast-action", base::Value(true));
   }
 
   base::WeakPtrFactory<XenonUIMessageHandler> weak_ptr_factory_{this};

@@ -147,6 +147,7 @@ source_set("browser") {
     "//xenon_overlay/chrome/browser/ui/webui:mojo_bindings",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources",
+    "//xenon_overlay/xenon/chrome/browser/ui/views:xenon_toast",
   ]
 
   if (enable_xenon_ai) {
@@ -158,6 +159,11 @@ source_set("browser") {
 
   if (use_aura) {
     deps += [ "//ui/wm" ]
+  }
+
+  if (enable_xenon_service) {
+    deps += [ "//xenon_overlay/xenon/chrome/browser/fonts:fonts" ]
+    data_deps = [ "//xenon_overlay/xenon/chrome/browser/fonts:copy_fonts" ]
   }
 }
 

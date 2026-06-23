@@ -18,6 +18,7 @@ class XenonBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
   ~XenonBrowserMainExtraParts() override;
 
   // ChromeBrowserMainExtraParts:
+  void PostEarlyInitialization() override;
   void PostProfileInit(Profile* profile, bool is_initial_profile) override;
   void PostMainMessageLoopRun() override;
 

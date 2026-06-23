@@ -1,0 +1,47 @@
+# Copyright 2026 The Xunlei Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//xenon_overlay/buildflags/features.gni")
+
+assert(enable_xenon_service)
+
+action("generate_font_embed") {
+  script = "generate_font_embed.py"
+  inputs = [
+    "D-DIN.ttf",
+    "D-DIN-Bold.ttf",
+    "generate_font_embed.py",
+  ]
+  outputs = [
+    "$target_gen_dir/xenon_font_embedded_data.cc",
+    "$target_gen_dir/xenon_font_embedded_data.h",
+  ]
+  args = [
+    "--out-cc=" + rebase_path("$target_gen_dir/xenon_font_embedded_data.cc"),
+    "--out-h=" + rebase_path("$target_gen_dir/xenon_font_embedded_data.h"),
+    "--regular=" + rebase_path("D-DIN.ttf"),
+    "--bold=" + rebase_path("D-DIN-Bold.ttf"),
+  ]
+}
+copy("copy_fonts") {
+  sources = [
+    "shanhaitongmengleyuan55w.ttf",
+  ]
+  outputs = [ "$root_out_dir/fonts/{{source_file_part}}" ]
+}
+
+source_set("fonts") {
+  sources = [
+    "$target_gen_dir/xenon_font_embedded_data.cc",
+    "xenon_font_loader.cc",
+    "xenon_font_loader.h",
+  ]
+
+  deps = [
+    ":generate_font_embed",
+    "//base",
+    "//skia",
+    "//ui/gfx",
+  ]
+}

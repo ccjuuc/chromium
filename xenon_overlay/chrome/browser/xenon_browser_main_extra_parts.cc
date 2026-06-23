@@ -19,6 +19,7 @@
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_webui_controller.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/xenon/chrome/browser/fonts/xenon_font_loader.h"
 
 #if BUILDFLAG(ENABLE_XENON_AI)
 #include "chrome/browser/ui/actions/chrome_action_id.h"
@@ -56,6 +57,10 @@ XenonBrowserMainExtraParts::~XenonBrowserMainExtraParts() {
   reminder_browser_observer_.reset();
 }
 
+void XenonBrowserMainExtraParts::PostEarlyInitialization() {
+  xenon_fonts::RegisterXunleiFonts();
+}
+
 void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
   // 在有序关闭阶段从 BrowserList 移除观察者并析构，避免进程退出时
   // 静态析构顺序导致 ObserverList 先于本对象析构而触发 observers_.empty() 的 CHECK
@@ -63,6 +68,7 @@ void XenonBrowserMainExtraParts::PostMainMessageLoopRun() {
     BrowserList::GetInstance()->RemoveObserver(reminder_browser_observer_.get());
     reminder_browser_observer_.reset();
   }
+  xenon_fonts::UnregisterXunleiFonts();
 }
 
 void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
