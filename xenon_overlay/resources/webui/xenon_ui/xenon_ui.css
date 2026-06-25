@@ -133,6 +133,17 @@ body {
   justify-content: flex-start;
 }
 
+.action-bar-start {
+  justify-content: flex-start;
+}
+
+.test-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 label {
   font-size: 12px;
   font-weight: 600;
@@ -368,4 +379,3 @@ textarea {
   border-top: 1px solid var(--card-border);
   margin: 16px 0;
 }
-

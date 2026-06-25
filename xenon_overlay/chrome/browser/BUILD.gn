@@ -22,6 +22,7 @@ source_set("xenon_common_bubble") {
   deps = [
     "//base",
     "//cc/paint",
+    "//chrome/browser/ui",
     "//ui/base",
     "//ui/base:types",
     "//ui/base/mojom:ui_base_types",
@@ -79,6 +80,8 @@ source_set("browser") {
     "ui/webui/xenon_webui_dev_proxy.h",
     "ui/xenon_frameless_shadow_view.cc",
     "ui/xenon_frameless_shadow_view.h",
+    "ui/xenon_menu_runner.cc",
+    "ui/xenon_menu_runner.h",
     "ui/xenon_reminder_browser_observer.cc",
     "ui/xenon_reminder_browser_observer.h",
     "ui/xenon_reminder_card_webview.cc",
@@ -114,6 +117,7 @@ source_set("browser") {
   ]
 
   deps = [
+    ":xenon_common_bubble",
     ":xenon_common_dialog",
     ":xenon_prefs",
     "//base",

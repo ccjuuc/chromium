@@ -6,7 +6,10 @@
 
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
+class WebUIBubbleManager;
+
 namespace views {
+class BubbleDialogDelegate;
 class View;
 class Widget;
 }  // namespace views
@@ -16,6 +19,8 @@ namespace xenon {
 // 与 Chrome 头像菜单（ProfileMenuViewBase）一致的 Bubble：标准阴影、圆角、主题背景。
 class XenonCommonBubble : public views::BubbleDialogDelegate {
  public:
+  static constexpr int kCornerRadius = 16;
+
   XenonCommonBubble(views::View* anchor_view, std::u16string text);
   ~XenonCommonBubble() override;
 
@@ -23,6 +28,11 @@ class XenonCommonBubble : public views::BubbleDialogDelegate {
   XenonCommonBubble& operator=(const XenonCommonBubble&) = delete;
 
   static views::Widget* Show(views::View* anchor_view, std::u16string text);
+  static void ConfigureBeforeWidgetInitialization(
+      views::BubbleDialogDelegate* bubble_delegate);
+  static void ApplyStyle(views::BubbleDialogDelegate* bubble_delegate);
+  static void ConfigureWebUIBubbleManager(WebUIBubbleManager* bubble_manager);
+  static void ApplyWebUIBubbleStyle(WebUIBubbleManager* bubble_manager);
 };
 
 }  // namespace xenon

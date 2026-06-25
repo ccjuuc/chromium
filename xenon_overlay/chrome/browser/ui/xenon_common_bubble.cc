@@ -3,13 +3,18 @@
 #include <memory>
 #include <utility>
 
+#include "base/memory/weak_ptr.h"
+#include "chrome/browser/ui/views/bubble/webui_bubble_manager.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/color/color_id.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/background.h"
 #include "ui/views/bubble/bubble_border.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view.h"
@@ -41,8 +46,9 @@ XenonCommonBubble::XenonCommonBubble(views::View* anchor_view,
   SetShowCloseButton(false);
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   set_fixed_width(kBubbleWidth);
+  set_corner_radius(kCornerRadius);
 
-  // 使用系统对话框圆角（GetCornerRadius 默认 kDialogRadius），与多数 Chrome bubble 一致
+  // 使用 Xenon 统一 16px 圆角，背景沿用当前主题 Bubble 背景。
   SetBackgroundColor(ui::kColorBubbleBackground);
 
   if (anchor_view && anchor_view->GetWidget()) {
@@ -82,6 +88,56 @@ views::Widget* XenonCommonBubble::Show(views::View* anchor_view,
     widget->Show();
   }
   return widget;
+}
+
+// static
+void XenonCommonBubble::ConfigureBeforeWidgetInitialization(
+    views::BubbleDialogDelegate* bubble_delegate) {
+  if (bubble_delegate) {
+    bubble_delegate->set_corner_radius(kCornerRadius);
+  }
+}
+
+// static
+void XenonCommonBubble::ApplyStyle(
+    views::BubbleDialogDelegate* bubble_delegate) {
+  if (!bubble_delegate) {
+    return;
+  }
+
+  views::BubbleFrameView* frame_view = bubble_delegate->GetBubbleFrameView();
+  if (!frame_view) {
+    return;
+  }
+
+  frame_view->SetRoundedCorners(gfx::RoundedCornersF(kCornerRadius));
+  if (frame_view->bubble_border()) {
+    frame_view->bubble_border()->set_md_shadow_elevation(
+        views::LayoutProvider::Get()->GetShadowElevationMetric(
+            views::Emphasis::kMaximum));
+  }
+}
+
+// static
+void XenonCommonBubble::ConfigureWebUIBubbleManager(
+    WebUIBubbleManager* bubble_manager) {
+  CHECK(bubble_manager);
+  // Chromium 142 WebUIBubbleManager only exposes a widget initialization
+  // callback without the WebUIBubbleDialogView pointer. Apply WebUI bubble
+  // styling after ShowBubble() via ApplyWebUIBubbleStyle().
+}
+
+// static
+void XenonCommonBubble::ApplyWebUIBubbleStyle(
+    WebUIBubbleManager* bubble_manager) {
+  CHECK(bubble_manager);
+  base::WeakPtr<WebUIBubbleDialogView> bubble_view =
+      bubble_manager->bubble_view_for_testing();
+  if (!bubble_view) {
+    return;
+  }
+  ConfigureBeforeWidgetInitialization(bubble_view.get());
+  ApplyStyle(bubble_view.get());
 }
 
 }  // namespace xenon

@@ -85,7 +85,7 @@
           </div>
 
           <div class="form-group">
-            <label for="web-dialog-title">标题 (Title)</label>
+            <label for="web-dialog-title">标题 (Title, 仅原生边框生效)</label>
             <input type="text" id="web-dialog-title" value="Xenon 浏览器">
           </div>
 
@@ -103,6 +103,55 @@
             <label class="switch-container">
               <input type="checkbox" id="web-dialog-modal" checked>
               <span class="switch-label">模态/置于父窗口之上 (Modal)</span>
+            </label>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="web-dialog-frame">
+              <span class="switch-label">原生边框 (Frame)</span>
+            </label>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="web-dialog-dwm">
+              <span class="switch-label">Win11 DWM 圆角 (DWM, 默认关闭)</span>
+            </label>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="web-dialog-resizable" checked>
+              <span class="switch-label">可调整大小 (Resizable)</span>
+            </label>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="web-dialog-always-on-top">
+              <span class="switch-label">置顶 (Always On Top)</span>
+            </label>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="web-dialog-skip-taskbar">
+              <span class="switch-label">不显示任务栏图标 (Skip Taskbar)</span>
+            </label>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="web-dialog-minimizable" checked>
+              <span class="switch-label">可最小化 (Minimizable)</span>
+            </label>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="switch-container">
+              <input type="checkbox" id="web-dialog-maximizable" checked>
+              <span class="switch-label">可最大化 (Maximizable)</span>
             </label>
           </div>
         </div>
@@ -187,6 +236,19 @@
         <div class="action-bar toast-action-bar">
           <button id="btn-show-toast" class="btn btn-primary">显示 Toast</button>
           <button id="btn-toast-loading-success" class="btn btn-secondary">Loading → Success</button>
+        </div>
+      </section>
+
+      <!-- Native Views Component Test Panel -->
+      <section class="card web-card">
+        <h2 class="card-title">原生 Views 组件测试</h2>
+        <p class="test-description">
+          在当前 WebUI 页面区域左上角，测试 Xenon 原生菜单、气泡与 WebUI 气泡的圆角、阴影、定位与交互。
+        </p>
+        <div class="action-bar action-bar-start">
+          <button id="btn-show-xenon-menu" class="btn btn-primary">测试 XenonMenuRunner</button>
+          <button id="btn-show-xenon-bubble" class="btn btn-secondary">测试 XenonCommonBubble</button>
+          <button id="btn-show-xenon-webui-bubble" class="btn btn-secondary">测试 WebUI Bubble</button>
         </div>
       </section>
 

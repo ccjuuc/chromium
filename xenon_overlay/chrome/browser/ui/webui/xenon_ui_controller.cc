@@ -4,8 +4,16 @@
 
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_ui_controller.h"
 
+#include <memory>
+
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/views/bubble/webui_bubble_manager.h"
+#include "chrome/browser/ui/webui/tab_search/tab_search_ui.h"
+#include "chrome/common/webui_url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -13,16 +21,32 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "content/public/common/url_constants.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_common_bubble.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_common_dialog.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_menu_runner.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_shadow_test_window.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/xenon/chrome/browser/ui/views/xenon_toast.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/views/bubble/bubble_border.h"
+#include "ui/views/controls/menu/menu_delegate.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/widget/widget.h"
 
 namespace xenon {
 
 namespace {
 constexpr char kHost[] = "xenon-ui";
+constexpr int kXenonMenuRunnerFirstCommandId = 1;
+constexpr int kXenonMenuRunnerSecondCommandId = 2;
+
+views::Widget* GetParentWidget(content::WebUI* web_ui) {
+  content::WebContents* web_contents = web_ui->GetWebContents();
+  return web_contents ? views::Widget::GetWidgetForNativeWindow(
+                            web_contents->GetTopLevelNativeWindow())
+                      : nullptr;
+}
 
 xunlei::XenonToast::Type ToastTypeFromString(const std::string& type) {
   if (type == "success") {
@@ -40,7 +64,8 @@ xunlei::XenonToast::Type ToastTypeFromString(const std::string& type) {
   return xunlei::XenonToast::Type::kInfo;
 }
 
-class XenonUIMessageHandler : public content::WebUIMessageHandler {
+class XenonUIMessageHandler : public content::WebUIMessageHandler,
+                              public views::MenuDelegate {
  public:
   XenonUIMessageHandler() = default;
   ~XenonUIMessageHandler() override = default;
@@ -87,6 +112,23 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler {
         "showToast",
         base::BindRepeating(&XenonUIMessageHandler::HandleShowToast,
                             base::Unretained(this)));
+
+    web_ui()->RegisterMessageCallback(
+        "showXenonMenuRunner",
+        base::BindRepeating(&XenonUIMessageHandler::HandleShowXenonMenuRunner,
+                            base::Unretained(this)));
+
+    web_ui()->RegisterMessageCallback(
+        "showXenonCommonBubble",
+        base::BindRepeating(
+            &XenonUIMessageHandler::HandleShowXenonCommonBubble,
+            base::Unretained(this)));
+
+    web_ui()->RegisterMessageCallback(
+        "showXenonWebUIBubble",
+        base::BindRepeating(
+            &XenonUIMessageHandler::HandleShowXenonWebUIBubble,
+            base::Unretained(this)));
   }
 
   void HandleShowExtension(const base::Value::List& args) {
@@ -194,17 +236,10 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler {
       return;
     }
 
-    const std::string* title_str = options.FindString("title");
-    std::u16string title = title_str ? base::UTF8ToUTF16(*title_str) : u"Xenon Web Dialog";
-    int width = options.FindInt("width").value_or(800);
-    int height = options.FindInt("height").value_or(600);
-    bool modal = options.FindBool("modal").value_or(true);
-
-    XenonWebDialog::ShowForLogin(
-        web_contents->GetBrowserContext(), url, width, height, title,
+    XenonWebDialog::ShowWithOptions(
+        web_contents->GetBrowserContext(), url, options,
         /*out_widget=*/nullptr, web_contents->GetTopLevelNativeWindow(),
-        modal ? ui::mojom::ModalType::kWindow : ui::mojom::ModalType::kNone,
-        base::OnceClosure(), /*show_close_button=*/true);
+        base::OnceClosure());
   }
 
   void HandleShowToast(const base::Value::List& args) {
@@ -253,6 +288,83 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler {
     FireWebUIListener("toast-action", base::Value(true));
   }
 
+  void HandleShowXenonMenuRunner(const base::Value::List&) {
+    AllowJavascript();
+
+    content::WebContents* web_contents = web_ui()->GetWebContents();
+    views::Widget* parent_widget = GetParentWidget(web_ui());
+    if (!web_contents || !parent_widget) {
+      return;
+    }
+
+    xenon_menu_runner_.reset();
+    auto menu = std::make_unique<views::MenuItemView>(this);
+    menu->AppendMenuItem(kXenonMenuRunnerFirstCommandId, u"测试菜单项 A");
+    menu->AppendMenuItem(kXenonMenuRunnerSecondCommandId, u"测试菜单项 B");
+
+    xenon_menu_runner_ = std::make_unique<XenonMenuRunner>(
+        std::move(menu), views::MenuRunner::NO_FLAGS);
+    xenon_menu_runner_->RunMenuAt(parent_widget, nullptr,
+                                  web_contents->GetContainerBounds(),
+                                  views::MenuAnchorPosition::kTopLeft,
+                                  ui::mojom::MenuSourceType::kNone);
+  }
+
+  void HandleShowXenonCommonBubble(const base::Value::List&) {
+    AllowJavascript();
+
+    views::Widget* parent_widget = GetParentWidget(web_ui());
+    if (!parent_widget) {
+      return;
+    }
+
+    XenonCommonBubble::Show(
+        parent_widget->GetContentsView(),
+        u"XenonCommonBubble\n16px 圆角 + 最大层级阴影");
+  }
+
+  void HandleShowXenonWebUIBubble(const base::Value::List&) {
+    AllowJavascript();
+
+    content::WebContents* web_contents = web_ui()->GetWebContents();
+    views::Widget* parent_widget = GetParentWidget(web_ui());
+    Browser* browser = web_contents ? chrome::FindBrowserWithTab(web_contents)
+                                    : nullptr;
+    if (!web_contents || !parent_widget || !browser) {
+      return;
+    }
+
+    if (xenon_webui_bubble_manager_ &&
+        xenon_webui_bubble_manager_->GetBubbleWidget()) {
+      xenon_webui_bubble_manager_->CloseBubble();
+      return;
+    }
+
+    if (!xenon_webui_bubble_manager_) {
+      xenon_webui_bubble_manager_ = WebUIBubbleManager::Create<TabSearchUI>(
+          parent_widget->GetContentsView(), browser,
+          GURL(chrome::kChromeUITabSearchURL), IDS_ACCNAME_TAB_SEARCH);
+      XenonCommonBubble::ConfigureWebUIBubbleManager(
+          xenon_webui_bubble_manager_.get());
+    }
+
+    const gfx::Rect container_bounds = web_contents->GetContainerBounds();
+    if (xenon_webui_bubble_manager_->ShowBubble(
+            gfx::Rect(container_bounds.origin(),
+                      gfx::Size(container_bounds.width(), 0)),
+            views::BubbleBorder::TOP_LEFT)) {
+      XenonCommonBubble::ApplyWebUIBubbleStyle(
+          xenon_webui_bubble_manager_.get());
+    }
+  }
+
+  // views::MenuDelegate:
+  void ExecuteCommand(int id) override {
+    FireWebUIListener("xenon-menu-command", base::Value(id));
+  }
+
+  std::unique_ptr<XenonMenuRunner> xenon_menu_runner_;
+  std::unique_ptr<WebUIBubbleManager> xenon_webui_bubble_manager_;
   base::WeakPtrFactory<XenonUIMessageHandler> weak_ptr_factory_{this};
 };
 

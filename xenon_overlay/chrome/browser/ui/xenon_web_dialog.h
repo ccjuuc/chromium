@@ -3,6 +3,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
@@ -27,6 +28,11 @@ namespace xenon {
 // The dialog will automatically handle window dragging based on these CSS properties.
 class XenonWebDialog : public ui::WebDialogDelegate {
  public:
+  // Default used when create options omit the `dwm` parameter.
+  static constexpr bool kDefaultUseDwm = false;
+  // Default used when create options omit the `resizable` parameter.
+  static constexpr bool kDefaultResizable = false;
+
   // Shows the dialog.
   // |context|: The browser profile.
   // |url|: The URL to load.
@@ -50,6 +56,13 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                            base::OnceClosure on_dialog_closed,
                            bool show_close_button = true);
 
+  static void ShowWithOptions(content::BrowserContext* context,
+                              const GURL& url,
+                              const base::Value::Dict& options,
+                              raw_ptr<views::Widget>* out_widget,
+                              gfx::NativeView parent,
+                              base::OnceClosure on_dialog_closed);
+
   // `--show-xenon-extension`: register Xenon WebUI Mojo and open chrome://xenon-overlay/.
   // Remote / observer checks run from the WebUI page (split Mojo tests).
   static void ShowXenonOverlay(Profile* profile);
@@ -69,6 +82,9 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   // loaded (normal startup loads it; `--show-xenon-extension` skips load).
   static void OpenComponentExtensionWindow(Profile* profile);
 
+  bool UseNativeFrame() const { return frame_; }
+  bool UseDwm() const { return dwm_; }
+
  private:
   XenonWebDialog(const GURL& url,
                  int width,
@@ -76,8 +92,29 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                  const std::u16string& title,
                  ui::mojom::ModalType modal_type,
                  base::OnceClosure on_dialog_closed,
-                 bool show_close_button);
+                 bool show_close_button,
+                 bool frame,
+                 bool dwm);
   ~XenonWebDialog() override;
+
+  static void ShowInternal(content::BrowserContext* context,
+                           const GURL& url,
+                           int width,
+                           int height,
+                           const std::u16string& title,
+                           raw_ptr<views::Widget>* out_widget,
+                           gfx::NativeView parent,
+                           ui::mojom::ModalType modal_type,
+                           base::OnceClosure on_dialog_closed,
+                           bool show_close_button,
+                           bool frame,
+                           bool dwm,
+                           bool resizable,
+                           bool minimizable,
+                           bool maximizable,
+                           bool always_on_top,
+                           bool skip_taskbar,
+                           bool show);
 
   // ui::WebDialogDelegate:
   ui::mojom::ModalType GetDialogModalType() const override;
@@ -101,6 +138,8 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   ui::mojom::ModalType modal_type_ = ui::mojom::ModalType::kNone;
   base::OnceClosure on_dialog_closed_;
   bool show_close_button_ = false;
+  bool frame_ = false;
+  bool dwm_ = kDefaultUseDwm;
 };
 
 }  // namespace xenon

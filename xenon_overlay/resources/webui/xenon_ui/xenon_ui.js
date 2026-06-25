@@ -42,6 +42,10 @@ document.addEventListener('DOMContentLoaded', () => {
     addLog('[C++ -> WebUI] Toast 操作按钮被点击');
   });
 
+  addWebUiListener('xenon-menu-command', (commandId) => {
+    addLog(`[C++ -> WebUI] XenonMenuRunner 执行菜单项: ${commandId}`);
+  });
+
   function buildToastOptions(overrides = {}) {
     return {
       type: overrides.type ?? document.getElementById('toast-type').value,
@@ -94,6 +98,13 @@ document.addEventListener('DOMContentLoaded', () => {
         width: parseInt(document.getElementById('web-dialog-width').value, 10) || 0,
         height: parseInt(document.getElementById('web-dialog-height').value, 10) || 0,
         modal: document.getElementById('web-dialog-modal').checked,
+        frame: document.getElementById('web-dialog-frame').checked,
+        dwm: document.getElementById('web-dialog-dwm').checked,
+        resizable: document.getElementById('web-dialog-resizable').checked,
+        alwaysOnTop: document.getElementById('web-dialog-always-on-top').checked,
+        skipTaskbar: document.getElementById('web-dialog-skip-taskbar').checked,
+        minimizable: document.getElementById('web-dialog-minimizable').checked,
+        maximizable: document.getElementById('web-dialog-maximizable').checked,
       };
       addLog(`[WebUI -> C++] 发送请求 'showWebDialog', 参数: ${JSON.stringify(options)}`);
       chrome.send('showWebDialog', [options]);
@@ -157,6 +168,31 @@ document.addEventListener('DOMContentLoaded', () => {
           duration_ms: 3000,
         });
       }, 1200);
+    });
+  }
+
+  const btnShowXenonMenu = document.getElementById('btn-show-xenon-menu');
+  if (btnShowXenonMenu) {
+    btnShowXenonMenu.addEventListener('click', () => {
+      addLog("[WebUI -> C++] 发送请求 'showXenonMenuRunner'");
+      chrome.send('showXenonMenuRunner');
+    });
+  }
+
+  const btnShowXenonBubble = document.getElementById('btn-show-xenon-bubble');
+  if (btnShowXenonBubble) {
+    btnShowXenonBubble.addEventListener('click', () => {
+      addLog("[WebUI -> C++] 发送请求 'showXenonCommonBubble'");
+      chrome.send('showXenonCommonBubble');
+    });
+  }
+
+  const btnShowXenonWebUiBubble = document.getElementById(
+      'btn-show-xenon-webui-bubble');
+  if (btnShowXenonWebUiBubble) {
+    btnShowXenonWebUiBubble.addEventListener('click', () => {
+      addLog("[WebUI -> C++] 发送请求 'showXenonWebUIBubble'");
+      chrome.send('showXenonWebUIBubble');
     });
   }
 
