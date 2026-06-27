@@ -24,6 +24,7 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_common_bubble.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_common_dialog.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_menu_runner.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_menu_shadow.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_shadow_test_window.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/xenon/chrome/browser/ui/views/xenon_toast.h"
@@ -62,6 +63,52 @@ xunlei::XenonToast::Type ToastTypeFromString(const std::string& type) {
     return xunlei::XenonToast::Type::kLoading;
   }
   return xunlei::XenonToast::Type::kInfo;
+}
+
+ShadowStyle ShadowStyleFromString(const std::string& style) {
+  if (style == "kNone") {
+    return ShadowStyle::kNone;
+  }
+  if (style == "kViewShadow") {
+    return ShadowStyle::kViewShadow;
+  }
+  if (style == "kCompositorShadow") {
+    return ShadowStyle::kCompositorShadow;
+  }
+  if (style == "kBoxShadow") {
+    return ShadowStyle::kBoxShadow;
+  }
+  return ShadowStyle::kBubbleBorder;
+}
+
+XenonMenuShadow ParseXenonMenuShadow(const base::Value::List& args) {
+  XenonMenuShadow shadow;
+
+  if (args.size() >= 1) {
+    const std::string style = args[0].is_string() ? args[0].GetString() : "";
+    shadow.style = ShadowStyleFromString(style);
+  }
+  if (args.size() >= 2) {
+    shadow.elevation = args[1].is_int() ? args[1].GetInt() : kDefaultElevation;
+  }
+  if (args.size() >= 3) {
+    if (args[2].is_double()) {
+      shadow.opacity = args[2].GetDouble();
+    } else if (args[2].is_int()) {
+      shadow.opacity = args[2].GetInt();
+    }
+  }
+  if (args.size() >= 5) {
+    shadow.x_offset = args[3].is_int() ? args[3].GetInt() : kDefaultXOffset;
+    shadow.y_offset = args[4].is_int() ? args[4].GetInt() : kDefaultYOffset;
+  }
+  if (args.size() >= 7) {
+    shadow.spread = args[5].is_int() ? args[5].GetInt() : kDefaultSpread;
+    shadow.color_hex =
+        args[6].is_string() ? args[6].GetString() : kDefaultColorHex;
+  }
+
+  return shadow;
 }
 
 class XenonUIMessageHandler : public content::WebUIMessageHandler,
@@ -288,7 +335,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
     FireWebUIListener("toast-action", base::Value(true));
   }
 
-  void HandleShowXenonMenuRunner(const base::Value::List&) {
+  void HandleShowXenonMenuRunner(const base::Value::List& args) {
     AllowJavascript();
 
     content::WebContents* web_contents = web_ui()->GetWebContents();
@@ -296,6 +343,8 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
     if (!web_contents || !parent_widget) {
       return;
     }
+
+    XenonMenuShadow shadow = ParseXenonMenuShadow(args);
 
     xenon_menu_runner_.reset();
     auto menu = std::make_unique<views::MenuItemView>(this);
@@ -307,23 +356,29 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
     xenon_menu_runner_->RunMenuAt(parent_widget, nullptr,
                                   web_contents->GetContainerBounds(),
                                   views::MenuAnchorPosition::kTopLeft,
-                                  ui::mojom::MenuSourceType::kNone);
+                                  ui::mojom::MenuSourceType::kNone,
+                                  shadow);
   }
 
-  void HandleShowXenonCommonBubble(const base::Value::List&) {
+  void HandleShowXenonCommonBubble(const base::Value::List& args) {
     AllowJavascript();
 
+    content::WebContents* web_contents = web_ui()->GetWebContents();
     views::Widget* parent_widget = GetParentWidget(web_ui());
-    if (!parent_widget) {
+    if (!web_contents || !parent_widget) {
       return;
     }
 
-    XenonCommonBubble::Show(
-        parent_widget->GetContentsView(),
-        u"XenonCommonBubble\n16px 圆角 + 最大层级阴影");
+    const gfx::Rect container_bounds = web_contents->GetContainerBounds();
+    XenonCommonBubble::ShowAt(parent_widget->GetContentsView(),
+                              gfx::Rect(container_bounds.origin(),
+                                        gfx::Size(container_bounds.width(), 0)),
+                              views::BubbleBorder::TOP_LEFT,
+                              u"XenonCommonBubble\n16px 圆角 + 同步阴影设置",
+                              ParseXenonMenuShadow(args));
   }
 
-  void HandleShowXenonWebUIBubble(const base::Value::List&) {
+  void HandleShowXenonWebUIBubble(const base::Value::List& args) {
     AllowJavascript();
 
     content::WebContents* web_contents = web_ui()->GetWebContents();
@@ -333,6 +388,8 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
     if (!web_contents || !parent_widget || !browser) {
       return;
     }
+
+    XenonMenuShadow shadow = ParseXenonMenuShadow(args);
 
     if (xenon_webui_bubble_manager_ &&
         xenon_webui_bubble_manager_->GetBubbleWidget()) {
@@ -354,7 +411,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
                       gfx::Size(container_bounds.width(), 0)),
             views::BubbleBorder::TOP_LEFT)) {
       XenonCommonBubble::ApplyWebUIBubbleStyle(
-          xenon_webui_bubble_manager_.get());
+          xenon_webui_bubble_manager_.get(), shadow);
     }
   }
 

@@ -6,9 +6,11 @@
 
 #include <utility>
 
-#include "base/time/time.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/widget/widget.h"
+#include "xenon_overlay/chrome/browser/ui/xenon_menu_shadow_modifier.h"
 
 namespace xenon {
 
@@ -32,9 +34,31 @@ void XenonMenuRunner::RunMenuAt(
     const gfx::Rect& bounds,
     views::MenuAnchorPosition anchor,
     ui::mojom::MenuSourceType source_type,
+    const XenonMenuShadow& shadow,
     gfx::NativeView native_view_for_gestures,
     std::optional<std::string> show_menu_host_duration_histogram) {
-  menu_runner_.RunMenuAt(parent, button_controller, bounds, anchor, source_type,
+  if (parent) {
+    auto* modifier = new MenuShadowModifier(shadow);
+    modifier->SetParentWidget(parent);
+    parent->AddObserver(modifier);
+  }
+
+  // To support translucent window and custom shadows (including kViewShadow, kBoxShadow, kCompositorShadow),
+  // we must ensure the MenuHost is initialized with a translucent opacity and no native shadow.
+  // In MenuHost::InitMenuHost, this is automatically set if bubble_border is true.
+  // We can force bubble_border to be true by mapping non-bubble anchors to bubble anchors.
+  views::MenuAnchorPosition mapped_anchor = anchor;
+  if (shadow.style != ShadowStyle::kBubbleBorder || shadow.elevation == 0) {
+    if (anchor == views::MenuAnchorPosition::kTopLeft) {
+      mapped_anchor = views::MenuAnchorPosition::kBubbleBottomRight;
+    } else if (anchor == views::MenuAnchorPosition::kTopRight) {
+      mapped_anchor = views::MenuAnchorPosition::kBubbleBottomLeft;
+    } else if (anchor == views::MenuAnchorPosition::kBottomCenter) {
+      mapped_anchor = views::MenuAnchorPosition::kBubbleBottomLeft;
+    }
+  }
+
+  menu_runner_.RunMenuAt(parent, button_controller, bounds, mapped_anchor, source_type,
                          native_view_for_gestures,
                          gfx::RoundedCornersF(kCornerRadius),
                          std::move(show_menu_host_duration_histogram));

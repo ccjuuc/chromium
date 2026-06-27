@@ -187,6 +187,12 @@
             <button id="btn-shadow-drop-borderless" class="btn btn-secondary btn-sm">无边框</button>
           </div>
         </div>
+        <hr class="divider">
+        <div class="action-bar action-bar-start" style="margin-top: 12px;">
+          <button id="btn-show-view-shadow-test" class="btn btn-primary">
+            打开 View 阴影测试 (ui::Shadow / ViewShadow / BubbleBorder)
+          </button>
+        </div>
       </section>
 
       <!-- Xenon Extension Panel -->
@@ -243,8 +249,61 @@
       <section class="card web-card">
         <h2 class="card-title">原生 Views 组件测试</h2>
         <p class="test-description">
-          在当前 WebUI 页面区域左上角，测试 Xenon 原生菜单、气泡与 WebUI 气泡的圆角、阴影、定位与交互。
+          在当前 WebUI 页面区域左上角，测试 Xenon 原生菜单、气泡与 WebUI 气泡的圆角、阴影、定位与交互。<br>
+          <strong>阴影默认值说明：</strong>原生菜单默认阴影高度为 12 (即 <code>bubble_menu_shadow_elevation</code>)；自定义阴影（如 ViewShadow）基底颜色默认为黑色 (<code>#000000</code>)，默认不透明度为 <code>0.2</code> (20%)，以实现自然柔和的消散渐变。
         </p>
+
+        <div class="form-grid" style="margin-top: 16px; margin-bottom: 16px;">
+          <div class="form-group">
+            <label for="menu-shadow-style">菜单阴影类型 (Menu Shadow Style)</label>
+            <select id="menu-shadow-style">
+              <option value="kBubbleBorder" selected>BubbleBorder (标准气泡阴影)</option>
+              <option value="kViewShadow">ViewShadow (自动图层阴影)</option>
+              <option value="kCompositorShadow">CompositorShadow (合成器图层阴影)</option>
+              <option value="kBoxShadow">BoxShadow (自定义 CSS box-shadow 阴影)</option>
+              <option value="kNone">None (无阴影)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="menu-shadow-elevation">菜单阴影高度/模糊 (Elevation / Blur)</label>
+            <select id="menu-shadow-elevation">
+              <option value="3">--cr-elevation-1 (3px - 低层级阴影)</option>
+              <option value="6">--cr-elevation-2 / --cr-menu-shadow (6px - 默认菜单阴影)</option>
+              <option value="12" selected>--cr-elevation-3 (12px - 原生菜单阴影默认值)</option>
+              <option value="16">--cr-elevation-4 (16px - 高层级阴影)</option>
+              <option value="24">--cr-elevation-5 (24px - 极大层级阴影)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="menu-shadow-opacity">阴影不透明度 (Opacity, 0.0 - 1.0)</label>
+            <input type="number" id="menu-shadow-opacity" value="0.2" min="0.0" max="1.0" step="0.1">
+          </div>
+          <div class="form-group">
+            <label for="menu-shadow-offset-x">阴影 X 轴偏移 (Offset X, px)</label>
+            <input type="number" id="menu-shadow-offset-x" value="0" min="-100" max="100">
+          </div>
+          <div class="form-group">
+            <label for="menu-shadow-offset-y">阴影 Y 轴偏移 (Offset Y, px)</label>
+            <input type="number" id="menu-shadow-offset-y" value="0" min="-100" max="100">
+          </div>
+          <div class="form-group">
+            <label for="menu-shadow-spread">阴影扩张半径 (Spread, px)</label>
+            <input type="number" id="menu-shadow-spread" value="0" min="-50" max="50">
+          </div>
+          <div class="form-group">
+            <label for="menu-shadow-color">阴影颜色 (Shadow Color)</label>
+            <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
+              <input type="color" id="menu-shadow-color" value="#000000" style="height: 40px; padding: 2px; width: 50px; min-width: 50px; box-sizing: border-box; cursor: pointer; border: 1px solid var(--card-border); border-radius: 6px;">
+              <button type="button" id="btn-color-preset-green" class="btn btn-secondary btn-sm" style="flex-grow: 1; white-space: nowrap;">暗绿色</button>
+              <button type="button" id="btn-color-preset-black" class="btn btn-secondary btn-sm" style="flex-grow: 1; white-space: nowrap;">黑色</button>
+            </div>
+          </div>
+          <div class="form-group" id="css-shadow-group" style="display: none; grid-column: span 2;">
+            <label for="menu-shadow-css">CSS box-shadow 属性值 (例如: 5px 5px 10px 2px rgba(15, 82, 46, 0.5))</label>
+            <input type="text" id="menu-shadow-css" value="0px 4px 12px rgba(0, 0, 0, 0.2)">
+          </div>
+        </div>
+
         <div class="action-bar action-bar-start">
           <button id="btn-show-xenon-menu" class="btn btn-primary">测试 XenonMenuRunner</button>
           <button id="btn-show-xenon-bubble" class="btn btn-secondary">测试 XenonCommonBubble</button>

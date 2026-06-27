@@ -16,6 +16,8 @@
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/menu/menu_runner.h"
 
+#include "xenon_overlay/chrome/browser/ui/xenon_menu_shadow.h"
+
 namespace base {
 class TimeTicks;
 }
@@ -56,6 +58,7 @@ class XenonMenuRunner {
       const gfx::Rect& bounds,
       views::MenuAnchorPosition anchor,
       ui::mojom::MenuSourceType source_type,
+      const XenonMenuShadow& shadow = XenonMenuShadow(),
       gfx::NativeView native_view_for_gestures = gfx::NativeView(),
       std::optional<std::string> show_menu_host_duration_histogram =
           std::nullopt);
