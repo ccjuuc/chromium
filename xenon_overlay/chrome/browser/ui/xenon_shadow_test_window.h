@@ -34,7 +34,8 @@ class XenonShadowTestWindow {
   // inspected without native/DWM rounded-corner artifacts.
   static void ShowWidgetShadowTestWindow(gfx::NativeView parent_view);
 
-  // Directly opens a Widget shadow sample window by string type ("kDefault", "kNone", "kDrop").
+  // Directly opens a Widget shadow sample window by string type ("kDefault",
+  // "kNone", "kDrop").
   static void ShowWidgetShadowSample(gfx::NativeView parent_view,
                                      const std::string& shadow_type_str,
                                      bool borderless,
@@ -45,6 +46,18 @@ class XenonShadowTestWindow {
   // The window demonstrates View-level shadow APIs, including ui::Shadow,
   // views::ViewShadow, and views::BubbleBorder.
   static void ShowViewShadowTestWindow(gfx::NativeView parent_view);
+
+  // Opens the View border inspection window.
+  //
+  // The window demonstrates common Views Border implementations, including
+  // empty, solid, rounded, padded, painter, bubble, and focusable borders.
+  static void ShowViewBorderTestWindow(gfx::NativeView parent_view);
+
+  // Opens the View animation inspection window.
+  //
+  // The window demonstrates common Views animation APIs, including
+  // AnimationBuilder and BoundsAnimator.
+  static void ShowViewAnimationTestWindow(gfx::NativeView parent_view);
 };
 
 }  // namespace xenon

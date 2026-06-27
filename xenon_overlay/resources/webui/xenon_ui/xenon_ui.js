@@ -264,6 +264,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  const btnShowViewBorderTest = document.getElementById('btn-show-view-border-test');
+  if (btnShowViewBorderTest) {
+    btnShowViewBorderTest.addEventListener('click', () => {
+      addLog("[WebUI -> C++] 发送请求 'showViewBorderTestWindow'");
+      chrome.send('showViewBorderTestWindow');
+    });
+  }
+
+  const btnShowViewAnimationTest = document.getElementById(
+      'btn-show-view-animation-test');
+  if (btnShowViewAnimationTest) {
+    btnShowViewAnimationTest.addEventListener('click', () => {
+      addLog("[WebUI -> C++] 发送请求 'showViewAnimationTestWindow'");
+      chrome.send('showViewAnimationTestWindow');
+    });
+  }
+
   const btnShowExtension = document.getElementById('btn-show-extension');
   if (btnShowExtension) {
     btnShowExtension.addEventListener('click', () => {

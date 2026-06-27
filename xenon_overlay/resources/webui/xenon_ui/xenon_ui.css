@@ -125,6 +125,14 @@ body {
   grid-column: span 2;
 }
 
+.border-card {
+  grid-column: span 2;
+}
+
+.animation-card {
+  grid-column: span 2;
+}
+
 .toast-card {
   grid-column: span 2;
 }

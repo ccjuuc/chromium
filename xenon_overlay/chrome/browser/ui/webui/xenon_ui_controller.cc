@@ -20,20 +20,20 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "content/public/common/url_constants.h"
-#include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/views/bubble/bubble_border.h"
+#include "ui/views/controls/menu/menu_delegate.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/widget/widget.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_common_bubble.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_common_dialog.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_menu_runner.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_menu_shadow.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_shadow_test_window.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
-#include "xenon_overlay/xenon/chrome/browser/ui/views/xenon_toast.h"
+#include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/resources/grit/xenon_resources.h"
-#include "ui/base/mojom/menu_source_type.mojom.h"
-#include "ui/views/bubble/bubble_border.h"
-#include "ui/views/controls/menu/menu_delegate.h"
-#include "ui/views/controls/menu/menu_item_view.h"
-#include "ui/views/widget/widget.h"
+#include "xenon_overlay/xenon/chrome/browser/ui/views/xenon_toast.h"
 
 namespace xenon {
 
@@ -156,6 +156,18 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
             base::Unretained(this)));
 
     web_ui()->RegisterMessageCallback(
+        "showViewBorderTestWindow",
+        base::BindRepeating(
+            &XenonUIMessageHandler::HandleShowViewBorderTestWindow,
+            base::Unretained(this)));
+
+    web_ui()->RegisterMessageCallback(
+        "showViewAnimationTestWindow",
+        base::BindRepeating(
+            &XenonUIMessageHandler::HandleShowViewAnimationTestWindow,
+            base::Unretained(this)));
+
+    web_ui()->RegisterMessageCallback(
         "showToast",
         base::BindRepeating(&XenonUIMessageHandler::HandleShowToast,
                             base::Unretained(this)));
@@ -167,15 +179,13 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
 
     web_ui()->RegisterMessageCallback(
         "showXenonCommonBubble",
-        base::BindRepeating(
-            &XenonUIMessageHandler::HandleShowXenonCommonBubble,
-            base::Unretained(this)));
+        base::BindRepeating(&XenonUIMessageHandler::HandleShowXenonCommonBubble,
+                            base::Unretained(this)));
 
     web_ui()->RegisterMessageCallback(
         "showXenonWebUIBubble",
-        base::BindRepeating(
-            &XenonUIMessageHandler::HandleShowXenonWebUIBubble,
-            base::Unretained(this)));
+        base::BindRepeating(&XenonUIMessageHandler::HandleShowXenonWebUIBubble,
+                            base::Unretained(this)));
   }
 
   void HandleShowExtension(const base::Value::List& args) {
@@ -227,6 +237,26 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
         web_contents->GetTopLevelNativeWindow());
   }
 
+  void HandleShowViewBorderTestWindow(const base::Value::List& args) {
+    AllowJavascript();
+    content::WebContents* web_contents = web_ui()->GetWebContents();
+    if (!web_contents) {
+      return;
+    }
+    XenonShadowTestWindow::ShowViewBorderTestWindow(
+        web_contents->GetTopLevelNativeWindow());
+  }
+
+  void HandleShowViewAnimationTestWindow(const base::Value::List& args) {
+    AllowJavascript();
+    content::WebContents* web_contents = web_ui()->GetWebContents();
+    if (!web_contents) {
+      return;
+    }
+    XenonShadowTestWindow::ShowViewAnimationTestWindow(
+        web_contents->GetTopLevelNativeWindow());
+  }
+
   void HandleShowCommonDialog(const base::Value::List& args) {
     AllowJavascript();
 
@@ -234,13 +264,24 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
       return;
     }
 
-    const std::string style_str = args[0].is_string() ? args[0].GetString() : "medium";
-    const std::u16string title = args[1].is_string() ? base::UTF8ToUTF16(args[1].GetString()) : std::u16string();
-    const std::u16string body_text = args[2].is_string() ? base::UTF8ToUTF16(args[2].GetString()) : std::u16string();
-    const std::u16string checkbox_text = args[3].is_string() ? base::UTF8ToUTF16(args[3].GetString()) : std::u16string();
+    const std::string style_str =
+        args[0].is_string() ? args[0].GetString() : "medium";
+    const std::u16string title = args[1].is_string()
+                                     ? base::UTF8ToUTF16(args[1].GetString())
+                                     : std::u16string();
+    const std::u16string body_text =
+        args[2].is_string() ? base::UTF8ToUTF16(args[2].GetString())
+                            : std::u16string();
+    const std::u16string checkbox_text =
+        args[3].is_string() ? base::UTF8ToUTF16(args[3].GetString())
+                            : std::u16string();
     const bool checkbox_checked = args[4].is_bool() ? args[4].GetBool() : false;
-    const std::u16string cancel_text = args[5].is_string() ? base::UTF8ToUTF16(args[5].GetString()) : std::u16string();
-    const std::u16string confirm_text = args[6].is_string() ? base::UTF8ToUTF16(args[6].GetString()) : std::u16string();
+    const std::u16string cancel_text =
+        args[5].is_string() ? base::UTF8ToUTF16(args[5].GetString())
+                            : std::u16string();
+    const std::u16string confirm_text =
+        args[6].is_string() ? base::UTF8ToUTF16(args[6].GetString())
+                            : std::u16string();
     const bool show_mask = args[7].is_bool() ? args[7].GetBool() : true;
 
     XenonCommonDialog::Style style = (style_str == "small")
@@ -318,8 +359,9 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
       }
     }
     if (!params.action_text.empty()) {
-      params.action_callback = base::BindOnce(
-          &XenonUIMessageHandler::OnToastAction, weak_ptr_factory_.GetWeakPtr());
+      params.action_callback =
+          base::BindOnce(&XenonUIMessageHandler::OnToastAction,
+                         weak_ptr_factory_.GetWeakPtr());
     }
 
     xunlei::XenonToast::Show(web_contents->GetTopLevelNativeWindow(),
@@ -331,9 +373,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
                       base::Value(result.checkbox_checked));
   }
 
-  void OnToastAction() {
-    FireWebUIListener("toast-action", base::Value(true));
-  }
+  void OnToastAction() { FireWebUIListener("toast-action", base::Value(true)); }
 
   void HandleShowXenonMenuRunner(const base::Value::List& args) {
     AllowJavascript();
@@ -356,8 +396,7 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
     xenon_menu_runner_->RunMenuAt(parent_widget, nullptr,
                                   web_contents->GetContainerBounds(),
                                   views::MenuAnchorPosition::kTopLeft,
-                                  ui::mojom::MenuSourceType::kNone,
-                                  shadow);
+                                  ui::mojom::MenuSourceType::kNone, shadow);
   }
 
   void HandleShowXenonCommonBubble(const base::Value::List& args) {
@@ -383,8 +422,8 @@ class XenonUIMessageHandler : public content::WebUIMessageHandler,
 
     content::WebContents* web_contents = web_ui()->GetWebContents();
     views::Widget* parent_widget = GetParentWidget(web_ui());
-    Browser* browser = web_contents ? chrome::FindBrowserWithTab(web_contents)
-                                    : nullptr;
+    Browser* browser =
+        web_contents ? chrome::FindBrowserWithTab(web_contents) : nullptr;
     if (!web_contents || !parent_widget || !browser) {
       return;
     }
@@ -448,8 +487,9 @@ XenonUIConfig::XenonUIConfig()
 
 XenonUIConfig::~XenonUIConfig() = default;
 
-std::unique_ptr<content::WebUIController>
-XenonUIConfig::CreateWebUIController(content::WebUI* web_ui, const GURL& url) {
+std::unique_ptr<content::WebUIController> XenonUIConfig::CreateWebUIController(
+    content::WebUI* web_ui,
+    const GURL& url) {
   return std::make_unique<XenonUIController>(web_ui);
 }
 
