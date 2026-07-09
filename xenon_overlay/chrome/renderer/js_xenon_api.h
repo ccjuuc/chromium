@@ -50,6 +50,7 @@ class JSXenonApi final : public gin::Wrappable<JSXenonApi>,
   void GetApiVersion(gin::Arguments* args);
   void EchoObject(gin::Arguments* args);
   void WrapObjectWithBrowserMeta(gin::Arguments* args);
+  void RegisterTool(gin::Arguments* args);
   void SendDataMaskRules(gin::Arguments* args);
   void SendDataMaskXPath(gin::Arguments* args);
   void SendDataMaskToMain(gin::Arguments* args);
@@ -82,6 +83,11 @@ class JSXenonApi final : public gin::Wrappable<JSXenonApi>,
                                    v8::Global<v8::Promise::Resolver> resolver_global,
                                    v8::Isolate* isolate,
                                    base::Value result);
+
+  void OnRegisterTool(v8::Global<v8::Context> global_context,
+                      v8::Global<v8::Promise::Resolver> resolver_global,
+                      v8::Isolate* isolate,
+                      bool success);
 
   mojo::Remote<xenon::mojom::XenonPageHost> xenon_host_;
   mojo::Remote<blink::mojom::DataMaskToMain> blink_data_mask_to_main_;

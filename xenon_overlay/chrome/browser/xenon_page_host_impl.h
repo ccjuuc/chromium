@@ -37,6 +37,11 @@ class XenonPageHostImpl : public mojom::XenonPageHost {
   void EchoObject(base::Value input, EchoObjectCallback callback) override;
   void WrapObjectWithBrowserMeta(base::Value input,
                                  WrapObjectWithBrowserMetaCallback callback) override;
+  void RegisterTool(const std::string& name,
+                    const std::string& description,
+                    const std::string& input_schema,
+                    mojo::PendingRemote<mojom::XenonToolExecutor> executor,
+                    RegisterToolCallback callback) override;
 
   raw_ptr<content::RenderFrameHost> render_frame_host_;
 };

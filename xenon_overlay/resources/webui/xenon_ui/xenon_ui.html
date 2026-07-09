@@ -99,11 +99,14 @@
             <input type="number" id="web-dialog-height" value="600" min="0">
           </div>
 
-          <div class="form-group checkbox-group">
-            <label class="switch-container">
-              <input type="checkbox" id="web-dialog-modal" checked>
-              <span class="switch-label">模态/置于父窗口之上 (Modal)</span>
-            </label>
+          <div class="form-group">
+            <label for="web-dialog-modal-type">模态类型 (Modal Type)</label>
+            <select id="web-dialog-modal-type">
+              <option value="none">非模态 (None)</option>
+              <option value="window">整个父窗口模态 (Window - 带窗口蒙层/不可拖动)</option>
+              <option value="window_custom" selected>自定义窗口模态 (WindowCustom - 无蒙层/父可拖动)</option>
+              <option value="child">网页模态 (Child/Tab - 带网页蒙层/使用DialogManager)</option>
+            </select>
           </div>
 
           <div class="form-group checkbox-group">

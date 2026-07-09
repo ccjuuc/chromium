@@ -11,6 +11,8 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "third_party/abseil-cpp/absl/strings/str_cat.h"
 
+#include "xenon_overlay/chrome/browser/xenon_page_tool_manager.h"
+
 namespace xenon {
 
 namespace {
@@ -68,6 +70,21 @@ void XenonPageHostImpl::WrapObjectWithBrowserMeta(
     wrapper.Set("browser_routing_id", -1);
   }
   std::move(callback).Run(base::Value(std::move(wrapper)));
+}
+
+void XenonPageHostImpl::RegisterTool(
+    const std::string& name,
+    const std::string& description,
+    const std::string& input_schema,
+    mojo::PendingRemote<mojom::XenonToolExecutor> executor,
+    RegisterToolCallback callback) {
+  if (!render_frame_host_ || !render_frame_host_->IsRenderFrameLive()) {
+    std::move(callback).Run(false);
+    return;
+  }
+  XenonPageToolManager::GetOrCreateForCurrentDocument(render_frame_host_)
+      ->RegisterTool(name, description, input_schema, std::move(executor));
+  std::move(callback).Run(true);
 }
 
 }  // namespace xenon

@@ -33,4 +33,7 @@ interface PageHandler {
   // Application session gate: when false, startup stays on login WebUI; call
   // with true after successful login. false shows relogin UI (see prefs).
   SetAppSessionLoggedIn(bool logged_in);
+
+  // Test executing a registered page tool.
+  TestExecutePageTool(string name, string input_json) => (bool success, string result);
 };

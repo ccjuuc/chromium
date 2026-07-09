@@ -9,6 +9,12 @@ interface XenonPageApi {
   getApiVersion(): Promise<string>;
   echoObject(obj: unknown): Promise<unknown>;
   wrapObjectWithBrowserMeta(obj: unknown): Promise<unknown>;
+  registerTool(
+      name: string,
+      description: string,
+      schema: unknown,
+      callback: (input: string) => string | Promise<string>
+  ): Promise<boolean>;
 }
 
 declare global {
@@ -179,6 +185,52 @@ document.addEventListener('DOMContentLoaded', () => {
       const {success, message} = result;
       console.log('OpenComponentExtensionDialog:', success, message);
       setStatus(statusText, false, success, message);
+    });
+  });
+
+  document.getElementById('test-page-host-register-tool')?.addEventListener('click', () => {
+    setStatus(xenonApiStatus, true, false, '');
+    const x = window.xenon;
+    if (!x) {
+      setStatus(
+          xenonApiStatus, false, false,
+          '未注入：需为本页 chrome://xenon-overlay/ 且安全上下文');
+      return;
+    }
+
+    const toolName = 'test_calculator';
+    x.registerTool(
+        toolName,
+        '一个由 WebUI 注册的测试加法计算器',
+        {
+          type: 'object',
+          properties: {
+            a: { type: 'number' },
+            b: { type: 'number' }
+          }
+        },
+        async (inputJson) => {
+          console.log('JS Executor called with:', inputJson);
+          const { a, b } = JSON.parse(inputJson);
+          // 异步等待 100ms 模拟异步操作，测试 Promise 路径
+          await new Promise(resolve => setTimeout(resolve, 100));
+          return `计算结果为: ${a + b}`;
+        }
+    ).then((ok) => {
+      if (!ok) {
+        setStatus(xenonApiStatus, false, false, '工具注册失败');
+        return;
+      }
+      console.log('工具注册成功，开始在浏览器侧测试触发执行...');
+      // 触发 C++ 侧的测试执行器
+      handler.testExecutePageTool(toolName, JSON.stringify({ a: 12, b: 30 })).then((res) => {
+        const { success, result } = res;
+        console.log('TestExecutePageTool result:', success, result);
+        setStatus(xenonApiStatus, false, success, `[Mojo 触发执行] success=${success} · ${result}`);
+      });
+    }).catch((err) => {
+      console.error('registerTool error:', err);
+      setStatus(xenonApiStatus, false, false, String(err));
     });
   });
 });

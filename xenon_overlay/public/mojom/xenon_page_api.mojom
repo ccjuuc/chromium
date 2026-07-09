@@ -6,6 +6,10 @@ module xenon.mojom;
 
 import "mojo/public/mojom/base/values.mojom";
 
+interface XenonToolExecutor {
+  Execute(string input_json) => (string? result);
+};
+
 // Document-scoped host for the renderer `window.xenon` binding (BrowserInterfaceBroker).
 interface XenonPageHost {
   // Round-trip to the browser process; `ok` false means the host declined or failed.
@@ -20,4 +24,7 @@ interface XenonPageHost {
   // Wraps `input` as `{"payload": input, "browser_routing_id": N}` for demo metadata.
   WrapObjectWithBrowserMeta(mojo_base.mojom.Value input) =>
       (mojo_base.mojom.Value output);
+
+  // Registers a tool with the browser process.
+  RegisterTool(string name, string description, string input_schema, pending_remote<XenonToolExecutor> executor) => (bool success);
 };

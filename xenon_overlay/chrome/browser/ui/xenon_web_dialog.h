@@ -9,6 +9,10 @@
 #include "ui/web_dialogs/web_dialog_delegate.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_WIN)
+#include "ui/events/event_handler.h"
+#endif
+
 namespace views {
 class Widget;
 }  // namespace views
@@ -85,6 +89,12 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   bool UseNativeFrame() const { return frame_; }
   bool UseDwm() const { return dwm_; }
 
+#if BUILDFLAG(IS_WIN)
+  void set_event_blocker(std::unique_ptr<ui::EventHandler> blocker) {
+    event_blocker_ = std::move(blocker);
+  }
+#endif
+
  private:
   XenonWebDialog(const GURL& url,
                  int width,
@@ -114,7 +124,8 @@ class XenonWebDialog : public ui::WebDialogDelegate {
                            bool maximizable,
                            bool always_on_top,
                            bool skip_taskbar,
-                           bool show);
+                           bool show,
+                           bool use_custom_modal = false);
 
   // ui::WebDialogDelegate:
   ui::mojom::ModalType GetDialogModalType() const override;
@@ -140,6 +151,9 @@ class XenonWebDialog : public ui::WebDialogDelegate {
   bool show_close_button_ = false;
   bool frame_ = false;
   bool dwm_ = kDefaultUseDwm;
+#if BUILDFLAG(IS_WIN)
+  std::unique_ptr<ui::EventHandler> event_blocker_;
+#endif
 };
 
 }  // namespace xenon

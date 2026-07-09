@@ -33,6 +33,9 @@ class XenonPageHandler : public mojom::PageHandler {
   void OpenComponentExtensionDialog(
       OpenComponentExtensionDialogCallback callback) override;
   void SetAppSessionLoggedIn(bool logged_in) override;
+  void TestExecutePageTool(const std::string& name,
+                           const std::string& input_json,
+                           TestExecutePageToolCallback callback) override;
 
  private:
   mojo::Receiver<mojom::PageHandler> receiver_;

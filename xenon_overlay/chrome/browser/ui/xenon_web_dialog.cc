@@ -1,6 +1,7 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 
 #include "base/functional/bind.h"
@@ -33,6 +34,13 @@
 #include "ui/views/window/frame_view.h"
 #include "url/gurl.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "components/constrained_window/constrained_window_views.h"
+#include "chrome/common/chrome_render_frame.mojom.h"
+#include "content/public/browser/render_frame_host.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
@@ -42,6 +50,9 @@
 #include "base/win/windows_version.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/views/win/hwnd_util.h"
+#include "ui/aura/window.h"
+#include "ui/events/event.h"
+#include "ui/events/event_handler.h"
 #endif
 
 namespace xenon {
@@ -53,6 +64,98 @@ constexpr int kDwmRoundedCornerHintRadius = 1;
 constexpr int kFramelessCompositorShadowElevation = 8;
 
 #if BUILDFLAG(IS_WIN)
+class ModalEventBlocker : public ui::EventHandler {
+ public:
+  ModalEventBlocker(aura::Window* parent_window, views::Widget* dialog_widget)
+      : parent_window_(parent_window), dialog_widget_(dialog_widget) {
+    if (parent_window_) {
+      parent_window_->AddPreTargetHandler(this);
+    }
+  }
+
+  ~ModalEventBlocker() override {
+    if (parent_window_) {
+      parent_window_->RemovePreTargetHandler(this);
+    }
+  }
+
+  // Prevent copying
+  ModalEventBlocker(const ModalEventBlocker&) = delete;
+  ModalEventBlocker& operator=(const ModalEventBlocker&) = delete;
+
+  // ui::EventHandler:
+  void OnMouseEvent(ui::MouseEvent* event) override {
+    if (IsEventForDialog(event)) {
+      return;
+    }
+    if (IsClientAreaEvent(event)) {
+      event->SetHandled();
+      if (event->type() == ui::EventType::kMousePressed && dialog_widget_) {
+        dialog_widget_->Activate();
+      }
+    }
+  }
+
+  void OnKeyEvent(ui::KeyEvent* event) override {
+    if (dialog_widget_ && dialog_widget_->IsActive()) {
+      return;
+    }
+    event->SetHandled();
+    if (dialog_widget_) {
+      dialog_widget_->Activate();
+    }
+  }
+
+  void OnTouchEvent(ui::TouchEvent* event) override {
+    if (IsEventForDialog(event)) {
+      return;
+    }
+    if (IsClientAreaEvent(event)) {
+      event->SetHandled();
+      if (event->type() == ui::EventType::kTouchPressed && dialog_widget_) {
+        dialog_widget_->Activate();
+      }
+    }
+  }
+
+ private:
+  bool IsEventForDialog(ui::LocatedEvent* event) {
+    if (!dialog_widget_ || !dialog_widget_->GetNativeWindow()) {
+      return false;
+    }
+    aura::Window* target = static_cast<aura::Window*>(event->target());
+    aura::Window* dialog_window = dialog_widget_->GetNativeWindow();
+    if (!target || !dialog_window) {
+      return false;
+    }
+    gfx::Point point = event->location();
+    aura::Window::ConvertPointToTarget(target, dialog_window, &point);
+    return gfx::Rect(dialog_window->bounds().size()).Contains(point);
+  }
+
+  bool IsClientAreaEvent(ui::LocatedEvent* event) {
+    if (!parent_window_) {
+      return false;
+    }
+    views::Widget* parent_widget = views::Widget::GetWidgetForNativeView(parent_window_);
+    if (parent_widget && parent_widget->non_client_view()) {
+      gfx::Point point = event->location();
+      aura::Window* target = static_cast<aura::Window*>(event->target());
+      if (target && target != parent_window_) {
+        aura::Window::ConvertPointToTarget(target, parent_window_, &point);
+      }
+      int hit_test = parent_widget->non_client_view()->NonClientHitTest(point);
+      if (hit_test != HTCLIENT) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  raw_ptr<aura::Window> parent_window_;
+  raw_ptr<views::Widget> dialog_widget_;
+};
+
 bool IsWin11OrLater() {
   return base::win::GetVersion() >= base::win::Version::WIN11;
 }
@@ -135,6 +238,44 @@ int GetResizeHitTest(const gfx::Point& point, const gfx::Rect& bounds) {
       point.y() >= bounds.bottom() + border) {
     return HTNOWHERE;
   }
+
+  // Check if point is outside the rounded corner active area
+  constexpr int R = kDialogCornerRadius;
+  const int max_dist = R + border + 2;
+  const int max_dist_sq = max_dist * max_dist;
+  // Top-Left corner
+  if (point.x() < bounds.x() + R && point.y() < bounds.y() + R) {
+    int dx = point.x() - (bounds.x() + R);
+    int dy = point.y() - (bounds.y() + R);
+    if (dx * dx + dy * dy > max_dist_sq) {
+      return HTNOWHERE;
+    }
+  }
+  // Top-Right corner
+  else if (point.x() > bounds.right() - R && point.y() < bounds.y() + R) {
+    int dx = point.x() - (bounds.right() - R);
+    int dy = point.y() - (bounds.y() + R);
+    if (dx * dx + dy * dy > max_dist_sq) {
+      return HTNOWHERE;
+    }
+  }
+  // Bottom-Left corner
+  else if (point.x() < bounds.x() + R && point.y() > bounds.bottom() - R) {
+    int dx = point.x() - (bounds.x() + R);
+    int dy = point.y() - (bounds.bottom() - R);
+    if (dx * dx + dy * dy > max_dist_sq) {
+      return HTNOWHERE;
+    }
+  }
+  // Bottom-Right corner
+  else if (point.x() > bounds.right() - R && point.y() > bounds.bottom() - R) {
+    int dx = point.x() - (bounds.right() - R);
+    int dy = point.y() - (bounds.bottom() - R);
+    if (dx * dx + dy * dy > max_dist_sq) {
+      return HTNOWHERE;
+    }
+  }
+
   const bool left = point.x() < bounds.x() + border;
   const bool right = point.x() >= bounds.right() - border;
   const bool top = point.y() < bounds.y() + border;
@@ -210,6 +351,38 @@ bool ResizeHitTestAffectsBottom(int hit_test) {
          hit_test == HTBOTTOMRIGHT;
 }
 
+void EnableDraggableRegionsForFrame(content::RenderFrameHost* rfh) {
+  if (!rfh || !rfh->IsRenderFrameLive()) {
+    return;
+  }
+  content::WebContents* web_contents = content::WebContents::FromRenderFrameHost(rfh);
+  if (web_contents) {
+    web_contents->SetSupportsDraggableRegions(true);
+  }
+}
+
+class XenonDraggableRegionsEnabler : public content::WebContentsObserver {
+ public:
+  explicit XenonDraggableRegionsEnabler(content::WebContents* web_contents)
+      : content::WebContentsObserver(web_contents) {
+    if (web_contents && web_contents->GetPrimaryMainFrame()) {
+      EnableDraggableRegionsForFrame(web_contents->GetPrimaryMainFrame());
+    }
+  }
+
+  void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override {
+    if (render_frame_host->IsInPrimaryMainFrame()) {
+      EnableDraggableRegionsForFrame(render_frame_host);
+    }
+  }
+
+  void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override {
+    if (render_frame_host->IsInPrimaryMainFrame()) {
+      EnableDraggableRegionsForFrame(render_frame_host);
+    }
+  }
+};
+
 // Frameless WebDialogView: -webkit-app-region drag + edge resize.
 class XenonWebDialogView : public views::WebDialogView {
  public:
@@ -262,8 +435,10 @@ class XenonWebDialogView : public views::WebDialogView {
         return hit;
       }
     }
+    gfx::Point web_point = point;
+    web_point.Offset(-GetInsets().left(), -GetInsets().top());
     if (draggable_region_ &&
-        draggable_region_->contains(point.x(), point.y())) {
+        draggable_region_->contains(web_point.x(), web_point.y())) {
       return HTCAPTION;
     }
     return views::WebDialogView::NonClientHitTest(point);
@@ -302,8 +477,10 @@ class XenonWebDialogView : public views::WebDialogView {
         IsInResizeBorder(location, GetCurrentResizeHitTestBounds())) {
       return false;
     }
+    gfx::Point web_location = location;
+    web_location.Offset(-GetInsets().left(), -GetInsets().top());
     if (draggable_region_ &&
-        draggable_region_->contains(location.x(), location.y())) {
+        draggable_region_->contains(web_location.x(), web_location.y())) {
       return false;
     }
     return views::WebDialogView::ShouldDescendIntoChildForEventHandling(
@@ -459,7 +636,10 @@ class XenonWebDialogView : public views::WebDialogView {
     }
 
     if (web_contents()) {
-      web_contents()->SetSupportsDraggableRegions(true);
+      if (!draggable_regions_enabler_) {
+        draggable_regions_enabler_ =
+            std::make_unique<XenonDraggableRegionsEnabler>(web_contents());
+      }
     }
 
     ui::Layer* widget_layer = GetWidget()->GetLayer();
@@ -543,6 +723,7 @@ class XenonWebDialogView : public views::WebDialogView {
 
   const raw_ptr<XenonWebDialog> xenon_delegate_;
   std::unique_ptr<SkRegion> draggable_region_;
+  std::unique_ptr<XenonDraggableRegionsEnabler> draggable_regions_enabler_;
   std::unique_ptr<ui::Shadow> compositor_shadow_;
   int manual_resize_hit_test_ = HTNOWHERE;
   gfx::Point manual_resize_start_screen_location_;
@@ -592,12 +773,24 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
       title_str ? base::UTF8ToUTF16(*title_str) : u"Xenon Web Dialog";
   const int width = options.FindInt("width").value_or(800);
   const int height = options.FindInt("height").value_or(600);
-  const bool modal = options.FindBool("modal").value_or(true);
+  ui::mojom::ModalType modal_type = ui::mojom::ModalType::kNone;
+  bool use_custom_modal = false;
+  if (options.FindBool("modal").value_or(true)) {
+    const std::string* modal_type_str = options.FindString("modalType");
+    if (modal_type_str && (*modal_type_str == "child" || *modal_type_str == "tab")) {
+      modal_type = ui::mojom::ModalType::kChild;
+    } else if (modal_type_str && *modal_type_str == "window_custom") {
+      modal_type = ui::mojom::ModalType::kWindow;
+      use_custom_modal = true;
+    } else {
+      modal_type = ui::mojom::ModalType::kWindow;
+    }
+  }
 
   ShowInternal(
       context, url, width > 0 ? width : 800, height > 0 ? height : 600, title,
       out_widget, parent,
-      modal ? ui::mojom::ModalType::kWindow : ui::mojom::ModalType::kNone,
+      modal_type,
       std::move(on_dialog_closed),
       options.FindBool("showCloseButton").value_or(true),
       options.FindBool("frame").value_or(false),
@@ -608,7 +801,8 @@ void XenonWebDialog::ShowWithOptions(content::BrowserContext* context,
       options.FindBool("maximizable").value_or(true),
       options.FindBool("alwaysOnTop").value_or(false),
       options.FindBool("skipTaskbar").value_or(false),
-      options.FindBool("show").value_or(true));
+      options.FindBool("show").value_or(true),
+      use_custom_modal);
 }
 
 void XenonWebDialog::ShowInternal(content::BrowserContext* context,
@@ -628,41 +822,77 @@ void XenonWebDialog::ShowInternal(content::BrowserContext* context,
                                   bool maximizable,
                                   bool always_on_top,
                                   bool skip_taskbar,
-                                  bool show) {
+                                  bool show,
+                                  bool use_custom_modal) {
+  content::WebContents* web_contents = nullptr;
+  if (modal_type == ui::mojom::ModalType::kChild && parent) {
+    Browser* browser = chrome::FindBrowserWithWindow(parent);
+    if (!browser) {
+      browser = chrome::FindBrowserWithWindow(parent->GetToplevelWindow());
+    }
+    if (browser) {
+      web_contents = browser->tab_strip_model()->GetActiveWebContents();
+    }
+  }
+
+  ui::mojom::ModalType delegate_modal_type = modal_type;
+#if BUILDFLAG(IS_WIN)
+  if (modal_type == ui::mojom::ModalType::kWindow && parent && use_custom_modal) {
+    delegate_modal_type = ui::mojom::ModalType::kNone;
+  }
+#endif
+
   auto* delegate =
-      new XenonWebDialog(url, width, height, title, modal_type,
+      new XenonWebDialog(url, width, height, title, delegate_modal_type,
                          std::move(on_dialog_closed), show_close_button, frame,
                          dwm);
   delegate->set_can_resize(resizable);
   delegate->set_can_minimize(minimizable);
   delegate->set_can_maximize(maximizable);
 
-  views::Widget* widget = new views::Widget;
-  views::Widget::InitParams params(
-      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
-  params.delegate = new XenonWebDialogView(
-      context, delegate, std::make_unique<ChromeWebContentsHandler>());
-  params.remove_standard_frame = !frame;
-  params.dont_show_in_taskbar = skip_taskbar;
-  params.type = views::Widget::InitParams::TYPE_WINDOW;
-  params.parent = parent;
-  if (!frame) {
+  views::Widget* widget = nullptr;
+  if (modal_type == ui::mojom::ModalType::kChild && web_contents) {
+    widget = constrained_window::ShowWebModalDialogViews(
+        new XenonWebDialogView(context, delegate,
+                               std::make_unique<ChromeWebContentsHandler>()),
+        web_contents);
+  } else {
+    widget = new views::Widget;
+    views::Widget::InitParams params(
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
+    params.delegate = new XenonWebDialogView(
+        context, delegate, std::make_unique<ChromeWebContentsHandler>());
+    params.remove_standard_frame = !frame;
+    params.dont_show_in_taskbar = skip_taskbar;
+    params.type = views::Widget::InitParams::TYPE_WINDOW;
+    params.parent = parent;
+    if (!frame) {
 #if BUILDFLAG(IS_WIN)
-    if (UseDwmRoundedCorners(dwm)) {
-      // Keep DWM-rounded windows opaque like XlDlcWebDialog. Translucent
-      // windows lose WS_THICKFRAME in Chromium's Win HWND style setup, which
-      // leaves only the resize cursor without actual resizing.
-      params.rounded_corners = gfx::RoundedCornersF(kDwmRoundedCornerHintRadius);
-    } else {
-      params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-    }
+      if (UseDwmRoundedCorners(dwm)) {
+        // Keep DWM-rounded windows opaque like XlDlcWebDialog. Translucent
+        // windows lose WS_THICKFRAME in Chromium's Win HWND style setup, which
+        // leaves only the resize cursor without actual resizing.
+        params.rounded_corners = gfx::RoundedCornersF(kDwmRoundedCornerHintRadius);
+      } else {
+        params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
+      }
 #else
-    params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-    params.rounded_corners = gfx::RoundedCornersF(kDialogCornerRadius);
+      params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
+      params.rounded_corners = gfx::RoundedCornersF(kDialogCornerRadius);
 #endif
-  }
+    }
 
-  widget->Init(std::move(params));
+    widget->Init(std::move(params));
+#if BUILDFLAG(IS_WIN)
+    if (modal_type == ui::mojom::ModalType::kWindow && parent && use_custom_modal) {
+      delegate->set_event_blocker(
+          std::make_unique<ModalEventBlocker>(parent, widget));
+    }
+#endif
+    if (show) {
+      widget->Show();
+    }
+  }
 #if BUILDFLAG(IS_WIN)
   if (HWND hwnd = views::HWNDForNativeWindow(widget->GetNativeWindow())) {
     LONG_PTR ex_style = ::GetWindowLongPtr(hwnd, GWL_EXSTYLE);

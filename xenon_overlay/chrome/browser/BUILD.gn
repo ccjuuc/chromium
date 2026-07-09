@@ -119,6 +119,8 @@ source_set("browser") {
     "xenon_manager.h",
     "xenon_page_host_impl.cc",
     "xenon_page_host_impl.h",
+    "xenon_page_tool_manager.cc",
+    "xenon_page_tool_manager.h",
   ]
 
   deps = [

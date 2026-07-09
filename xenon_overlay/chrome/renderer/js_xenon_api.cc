@@ -8,6 +8,9 @@
 #include "base/functional/bind.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/renderer/v8_value_converter.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "v8/include/v8-json.h"
 #include "gin/converter.h"
 #include "gin/object_template_builder.h"
 #include "gin/persistent.h"
@@ -41,6 +44,106 @@ void DefineGlobalReadOnly(v8::Isolate* isolate,
   desc.set_enumerable(true);
   global->DefineProperty(context, name, desc).Check();
 }
+
+struct PromiseResolverContext {
+  v8::Global<v8::Context> context;
+  mojom::XenonToolExecutor::ExecuteCallback callback;
+};
+
+void OnPromiseResolved(const v8::FunctionCallbackInfo<v8::Value>& info) {
+  v8::Isolate* isolate = info.GetIsolate();
+  void* data = info.Data().As<v8::External>()->Value();
+  auto* resolver_ctx = static_cast<PromiseResolverContext*>(data);
+
+  std::string result_str;
+  if (info.Length() > 0 && gin::ConvertFromV8(isolate, info[0], &result_str)) {
+    std::move(resolver_ctx->callback).Run(result_str);
+  } else {
+    std::move(resolver_ctx->callback).Run(std::nullopt);
+  }
+  delete resolver_ctx;
+}
+
+void OnPromiseRejected(const v8::FunctionCallbackInfo<v8::Value>& info) {
+  void* data = info.Data().As<v8::External>()->Value();
+  auto* resolver_ctx = static_cast<PromiseResolverContext*>(data);
+  std::move(resolver_ctx->callback).Run(std::nullopt);
+  delete resolver_ctx;
+}
+
+class XenonToolExecutorImpl : public mojom::XenonToolExecutor {
+ public:
+  XenonToolExecutorImpl(v8::Isolate* isolate,
+                        v8::Local<v8::Context> context,
+                        v8::Local<v8::Function> callback)
+      : isolate_(isolate),
+        context_(isolate, context),
+        callback_(isolate, callback) {}
+  ~XenonToolExecutorImpl() override = default;
+
+  void Execute(const std::string& input_json, ExecuteCallback callback) override {
+    callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback),
+                                                           std::nullopt);
+
+    if (context_.IsEmpty() || callback_.IsEmpty()) {
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+
+    v8::HandleScope handle_scope(isolate_);
+    v8::Local<v8::Context> context = context_.Get(isolate_);
+    v8::Context::Scope context_scope(context);
+    v8::MicrotasksScope microtasks(isolate_, context->GetMicrotaskQueue(),
+                                   v8::MicrotasksScope::kDoNotRunMicrotasks);
+
+    v8::Local<v8::Function> js_callback = callback_.Get(isolate_);
+    v8::Local<v8::Value> argv[1];
+    argv[0] = gin::StringToV8(isolate_, input_json);
+
+    v8::TryCatch try_catch(isolate_);
+    v8::MaybeLocal<v8::Value> maybe_result =
+        js_callback->Call(context, context->Global(), 1, argv);
+
+    if (try_catch.HasCaught() || maybe_result.IsEmpty()) {
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+
+    v8::Local<v8::Value> result = maybe_result.ToLocalChecked();
+    if (result->IsPromise()) {
+      v8::Local<v8::Promise> promise = result.As<v8::Promise>();
+      auto* resolver_ctx = new PromiseResolverContext{
+          v8::Global<v8::Context>(isolate_, context), std::move(callback)};
+      v8::Local<v8::External> data_ext = v8::External::New(isolate_, resolver_ctx);
+      v8::Local<v8::Function> resolved_fn;
+      v8::Local<v8::Function> rejected_fn;
+      if (!v8::Function::New(context, OnPromiseResolved, data_ext)
+               .ToLocal(&resolved_fn) ||
+          !v8::Function::New(context, OnPromiseRejected, data_ext)
+               .ToLocal(&rejected_fn)) {
+        std::move(resolver_ctx->callback).Run(std::nullopt);
+        delete resolver_ctx;
+        return;
+      }
+      if (promise->Then(context, resolved_fn, rejected_fn).IsEmpty()) {
+        std::move(resolver_ctx->callback).Run(std::nullopt);
+        delete resolver_ctx;
+      }
+    } else {
+      std::string result_str;
+      if (gin::ConvertFromV8(isolate_, result, &result_str)) {
+        std::move(callback).Run(result_str);
+      } else {
+        std::move(callback).Run(std::nullopt);
+      }
+    }
+  }
+
+ private:
+  raw_ptr<v8::Isolate> isolate_;
+  v8::Global<v8::Context> context_;
+  v8::Global<v8::Function> callback_;
+};
 
 }  // namespace
 
@@ -101,6 +204,7 @@ gin::ObjectTemplateBuilder JSXenonApi::GetObjectTemplateBuilder(
       .SetMethod("getApiVersion", &JSXenonApi::GetApiVersion)
       .SetMethod("echoObject", &JSXenonApi::EchoObject)
       .SetMethod("wrapObjectWithBrowserMeta", &JSXenonApi::WrapObjectWithBrowserMeta)
+      .SetMethod("registerTool", &JSXenonApi::RegisterTool)
       .SetMethod("sendDataMaskRules", &JSXenonApi::SendDataMaskRules)
       .SetMethod("sendDataMaskXPath", &JSXenonApi::SendDataMaskXPath)
       .SetMethod("sendDataMaskToMain", &JSXenonApi::SendDataMaskToMain);
@@ -570,6 +674,88 @@ void JSXenonApi::OnWrapObjectWithBrowserMeta(
     base::Value result) {
   OnEchoObject(std::move(global_context), std::move(resolver_global), isolate,
                std::move(result));
+}
+
+void JSXenonApi::RegisterTool(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  v8::Local<v8::Context> context = args->GetHolderCreationContext();
+  v8::Local<v8::Promise::Resolver> resolver;
+  if (!v8::Promise::Resolver::New(context).ToLocal(&resolver)) {
+    return;
+  }
+
+  std::string name;
+  std::string description;
+  v8::Local<v8::Value> schema_val;
+  v8::Local<v8::Function> callback_fn;
+
+  if (!args->GetNext(&name) || !args->GetNext(&description) ||
+      !args->GetNext(&schema_val) || !args->GetNext(&callback_fn)) {
+    resolver->Reject(context, gin::StringToV8(isolate, "Xenon: Invalid arguments for registerTool"))
+        .Check();
+    args->Return(resolver->GetPromise());
+    return;
+  }
+
+  if (!EnsureConnected() || !render_frame()) {
+    resolver->Reject(context, gin::StringToV8(isolate, "Xenon: not connected")).Check();
+    args->Return(resolver->GetPromise());
+    return;
+  }
+
+  std::string schema_str;
+  if (schema_val->IsObject()) {
+    v8::TryCatch try_catch(isolate);
+    v8::Local<v8::Object> schema_obj = schema_val.As<v8::Object>();
+    v8::MaybeLocal<v8::String> maybe_json = v8::JSON::Stringify(context, schema_obj);
+    if (try_catch.HasCaught() || maybe_json.IsEmpty() ||
+        !gin::ConvertFromV8(isolate, maybe_json.ToLocalChecked(), &schema_str)) {
+      resolver->Reject(context, gin::StringToV8(isolate, "Xenon: Failed to stringify schema")).Check();
+      args->Return(resolver->GetPromise());
+      return;
+    }
+  } else if (!gin::ConvertFromV8(isolate, schema_val, &schema_str)) {
+    resolver->Reject(context, gin::StringToV8(isolate, "Xenon: schema must be an object or a string")).Check();
+    args->Return(resolver->GetPromise());
+    return;
+  }
+
+  mojo::PendingRemote<mojom::XenonToolExecutor> pending_remote;
+  mojo::MakeSelfOwnedReceiver(
+      std::make_unique<XenonToolExecutorImpl>(isolate, context, callback_fn),
+      pending_remote.InitWithNewPipeAndPassReceiver());
+
+  v8::Global<v8::Promise::Resolver> resolver_global(isolate, resolver);
+  v8::Global<v8::Context> global_context(isolate, context);
+
+  xenon_host_->RegisterTool(
+      name, description, schema_str, std::move(pending_remote),
+      base::BindOnce(
+          &JSXenonApi::OnRegisterTool,
+          gin::WrapPersistent(weak_factory_.GetWeakCell(
+              isolate->GetCppHeap()->GetAllocationHandle())),
+          std::move(global_context), std::move(resolver_global), isolate));
+
+  args->Return(resolver->GetPromise());
+}
+
+void JSXenonApi::OnRegisterTool(v8::Global<v8::Context> global_context,
+                                v8::Global<v8::Promise::Resolver> resolver_global,
+                                v8::Isolate* isolate,
+                                bool success) {
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Context> context = global_context.Get(isolate);
+  v8::Context::Scope context_scope(context);
+  v8::MicrotasksScope microtasks(isolate, context->GetMicrotaskQueue(),
+                                 v8::MicrotasksScope::kDoNotRunMicrotasks);
+  v8::Local<v8::Promise::Resolver> resolver = resolver_global.Get(isolate);
+
+  if (!render_frame()) {
+    resolver->Reject(context, gin::StringToV8(isolate, "Xenon: frame detached")).Check();
+    return;
+  }
+
+  resolver->Resolve(context, v8::Boolean::New(isolate, success)).Check();
 }
 
 }  // namespace xenon

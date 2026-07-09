@@ -10,6 +10,7 @@
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
 #include "xenon_overlay/chrome/browser/xenon_login_controller.h"
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
+#include "xenon_overlay/chrome/browser/xenon_page_tool_manager.h"
 
 namespace xenon {
 
@@ -253,7 +254,47 @@ void XenonPageHandler::SetAppSessionLoggedIn(bool logged_in) {
     return;
   }
   XenonLoginController::GetInstance()->SetAppSessionLoggedIn(profile,
-                                                              logged_in);
+                                                               logged_in);
+}
+
+void XenonPageHandler::TestExecutePageTool(
+    const std::string& name,
+    const std::string& input_json,
+    TestExecutePageToolCallback callback) {
+  if (!web_ui_ || !web_ui_->GetWebContents()) {
+    std::move(callback).Run(false, "WebUI context lost");
+    return;
+  }
+  content::RenderFrameHost* rfh = web_ui_->GetWebContents()->GetPrimaryMainFrame();
+  if (!rfh) {
+    std::move(callback).Run(false, "No render frame host");
+    return;
+  }
+  XenonPageToolManager* manager = XenonPageToolManager::GetForCurrentDocument(rfh);
+  if (!manager) {
+    std::move(callback).Run(false, "No XenonPageToolManager found");
+    return;
+  }
+  for (const auto& tool : manager->GetTools()) {
+    if (tool.name == name) {
+      tool.executor->Execute(
+          input_json,
+          base::BindOnce(
+              [](TestExecutePageToolCallback cb,
+                 const std::optional<std::string>& result) {
+                if (result.has_value()) {
+                  std::move(cb).Run(true, *result);
+                } else {
+                  std::move(cb).Run(false, "Tool execution returned nullopt");
+                }
+              },
+              mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+                  std::move(callback), false,
+                  "Tool execution failed (callback dropped)")));
+      return;
+    }
+  }
+  std::move(callback).Run(false, "Tool not found by name: " + name);
 }
 
 }  // namespace xenon
