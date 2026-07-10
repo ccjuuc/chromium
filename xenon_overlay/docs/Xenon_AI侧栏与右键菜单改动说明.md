@@ -74,9 +74,9 @@
 
 ## 6. 相关文档
 
-- 集成总览：`xenon_ai_integration.md`
-- 流程与 Brave 对照：`xenon_ai_brave_components_reference.md`
-- KeyedService：`keyed_service_guide.md`
+- 集成总览：`Xenon_AI集成参考.md`
+- 流程与 Brave 对照：`Xenon_AI与Brave组件流程对照.md`
+- KeyedService：`KeyedService详解.md`
 
 ---
 

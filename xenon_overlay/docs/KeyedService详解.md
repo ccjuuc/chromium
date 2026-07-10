@@ -224,6 +224,6 @@ DependsOn(OtherServiceFactory::GetInstance());
 
 ## 10. 延伸阅读
 
-- [`design_patterns_chromium_and_brave.md`](./design_patterns_chromium_and_brave.md) — KeyedService 模式速览  
-- [`xenon_ai_integration.md`](./xenon_ai_integration.md) — Xenon AI 分层与侧栏边界  
-- [`xenon_ai_brave_components_reference.md`](./xenon_ai_brave_components_reference.md) — 端到端流程（含 Profile 服务在流水线中的位置）  
+- [`Chromium与Brave设计模式.md`](./Chromium与Brave设计模式.md) — KeyedService 模式速览  
+- [`Xenon_AI集成参考.md`](./Xenon_AI集成参考.md) — Xenon AI 分层与侧栏边界  
+- [`Xenon_AI与Brave组件流程对照.md`](./Xenon_AI与Brave组件流程对照.md) — 端到端流程（含 Profile 服务在流水线中的位置）  

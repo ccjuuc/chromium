@@ -2,7 +2,7 @@
 
 面向 **`feature/xenon-overlay`**：Browser / Utility **Mojo**、**WebUI**、**组件扩展** 与 **`chrome.xenonPrivate`**、**`XenonWebDialog`**、提醒与 Bubble UI、资源与 **Buildflags** 等。由口述备忘整理，文末保留提交列表与生成说明。
 
-> 单点 API 说明见同目录 [`chrome_xenon_private_api.md`](./chrome_xenon_private_api.md)（`window.xenon` / Broker 见 [`xenon_page_api_browser_interface_broker.md`](./xenon_page_api_browser_interface_broker.md)）。**AI 分层与附录索引** 见 [`xenon_ai_integration.md`](./xenon_ai_integration.md)；**流程导向的 Brave Leo/Local AI 与 Xenon 对照** 见 [`xenon_ai_brave_components_reference.md`](./xenon_ai_brave_components_reference.md)。
+> 单点 API 说明见同目录 [`chrome_xenonPrivate扩展API.md`](./chrome_xenonPrivate扩展API.md)（`window.xenon` / Broker 见 [`window_xenon与BrowserInterfaceBroker备忘.md`](./window_xenon与BrowserInterfaceBroker备忘.md)）。**AI 分层与附录索引** 见 [`Xenon_AI集成参考.md`](./Xenon_AI集成参考.md)；**流程导向的 Brave Leo/Local AI 与 Xenon 对照** 见 [`Xenon_AI与Brave组件流程对照.md`](./Xenon_AI与Brave组件流程对照.md)。
 
 ---
 
@@ -14,9 +14,9 @@
    · [3.6 三种 Browser↔Utility 路径归纳（主接口 / Associated / Observer）](#36-三种-browserutility-路径归纳主接口--associated--observer)
 4. [Mojo 服务：`XenonMainService` 全链路](#4-mojo-服务xenonmainservice-全链路)
 5. [WebUI](#5-webui)  
-   · [AI 集成与分层](./xenon_ai_integration.md) · [流程：Brave 组件与 Xenon 对照](./xenon_ai_brave_components_reference.md)
+   · [AI 集成与分层](./Xenon_AI集成参考.md) · [流程：Brave 组件与 Xenon 对照](./Xenon_AI与Brave组件流程对照.md)
 6. [内置扩展（Component Extension）](#6-内置扩展component-extension)  
-   · [独立文档：`chrome.xenonPrivate` 用法与接入](./chrome_xenon_private_api.md)  
+   · [独立文档：`chrome.xenonPrivate` 用法与接入](./chrome_xenonPrivate扩展API.md)  
    · [6.5 扩展与 Browser 原生对接的可选路径](#65-扩展与-browser-原生对接的可选路径)  
    · [6.6 添加自定义 Extension API 的详细步骤](#66-添加自定义-extension-api-的详细步骤)  
    · [6.7 示例：`chrome.xenonPrivate` 涉及文件](#67-示例chromexenonprivate-涉及文件)
@@ -328,7 +328,7 @@ sequenceDiagram
 
 工厂：`xenon_webui_controller_factory` 映射 URL。
 
-**与 `window.xenon` 勿混**：`chrome://xenon-overlay/` 上既有 **帧级** `XenonPageHost`（`PopulateChromeFrameBinders`），也有 **WebUI 专用** `PageHandler`（`PageHandler.getRemote()` + `WebUIBrowserInterfaceBrokerRegistry`）。**`chrome_browser_interface_binders` 中 `PopulateChromeWebUIFrameBinders` 与 `WebUIBrowserInterfaceBrokerRegistry` 是两条不同机制**（前者把接口打进**全局帧** `BinderMap` + `RegisterWebUIControllerInterfaceBinder` 过滤控制器类型；后者为每个 WebUI 类型建 **PerWebUIBroker**）。生成物 **`xenon.mojom-webui.js` 的 BUILD/GRD/AddResourcePath 链路**、逐步接入清单见 **`docs/xenon_page_api_browser_interface_broker.md` §10**。
+**与 `window.xenon` 勿混**：`chrome://xenon-overlay/` 上既有 **帧级** `XenonPageHost`（`PopulateChromeFrameBinders`），也有 **WebUI 专用** `PageHandler`（`PageHandler.getRemote()` + `WebUIBrowserInterfaceBrokerRegistry`）。**`chrome_browser_interface_binders` 中 `PopulateChromeWebUIFrameBinders` 与 `WebUIBrowserInterfaceBrokerRegistry` 是两条不同机制**（前者把接口打进**全局帧** `BinderMap` + `RegisterWebUIControllerInterfaceBinder` 过滤控制器类型；后者为每个 WebUI 类型建 **PerWebUIBroker**）。生成物 **`xenon.mojom-webui.js` 的 BUILD/GRD/AddResourcePath 链路**、逐步接入清单见 **`docs/window_xenon与BrowserInterfaceBroker备忘.md` §10**。
 
 ---
 

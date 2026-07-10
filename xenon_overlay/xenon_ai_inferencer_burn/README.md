@@ -7,7 +7,7 @@ Chromium’s toolchain per `docs/rust.md` (“Using cargo”):
   `//third_party/rust-toolchain` (not rustup on `PATH`).
 - **Dependencies**: `Cargo.toml` / `Cargo.lock` (may fetch crates from the
   network on first build; full `//third_party/rust` vendoring is optional and
-  heavy—see `xenon_overlay/docs/chromium_rust_integration.md`).
+  heavy—see `xenon_overlay/docs/Chromium接入Rust库指南.md`).
 
 ## GN
 

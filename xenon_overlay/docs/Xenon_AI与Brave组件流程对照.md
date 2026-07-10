@@ -1,6 +1,6 @@
 # Xenon AI 与 Brave 浏览器 AI 组件参考（流程导向）
 
-本文把 **Chromium 侧栏机制**、**Xenon AI 在 Chromium 树中的接法**，以及 **Brave Leo / Brave Local AI** 两条参考实现，按 **时间顺序与调用链** 串成可读的一条线。粒度偏细，适合对照源码走读；**分层原则与附录级索引**仍以 [`xenon_ai_integration.md`](./xenon_ai_integration.md) 为准。
+本文把 **Chromium 侧栏机制**、**Xenon AI 在 Chromium 树中的接法**，以及 **Brave Leo / Brave Local AI** 两条参考实现，按 **时间顺序与调用链** 串成可读的一条线。粒度偏细，适合对照源码走读；**分层原则与附录级索引**仍以 [`Xenon_AI集成参考.md`](./Xenon_AI集成参考.md) 为准。
 
 ---
 
@@ -9,11 +9,11 @@
 | 文档 | 侧重 |
 |------|------|
 | **本文** | 端到端流程、Brave 与 Xenon **逐步对照**、组件在链路上的位置 |
-| [`xenon_ai_integration.md`](./xenon_ai_integration.md) | Xenon 推荐分层、`window.xenon` 边界、附录 A/B/C、**实现路径速查表** |
-| [`xenon_overlay_architecture.md`](./xenon_overlay_architecture.md) | Xenon 总架构（Mojo、Utility、WebUI、扩展），非 AI 专论 |
-| [`xenon_page_api_browser_interface_broker.md`](./xenon_page_api_browser_interface_broker.md) | 帧级 `XenonPageHost` / Broker |
-| [`chrome_xenon_private_api.md`](./chrome_xenon_private_api.md) | `chrome.xenonPrivate` |
-| [`design_patterns_chromium_and_brave.md`](./design_patterns_chromium_and_brave.md) | KeyedService、Mojo、`chromium_src` 等模式速查 |
+| [`Xenon_AI集成参考.md`](./Xenon_AI集成参考.md) | Xenon 推荐分层、`window.xenon` 边界、附录 A/B/C、**实现路径速查表** |
+| [`Xenon_Overlay架构与实现参考.md`](./Xenon_Overlay架构与实现参考.md) | Xenon 总架构（Mojo、Utility、WebUI、扩展），非 AI 专论 |
+| [`window_xenon与BrowserInterfaceBroker备忘.md`](./window_xenon与BrowserInterfaceBroker备忘.md) | 帧级 `XenonPageHost` / Broker |
+| [`chrome_xenonPrivate扩展API.md`](./chrome_xenonPrivate扩展API.md) | `chrome.xenonPrivate` |
+| [`Chromium与Brave设计模式.md`](./Chromium与Brave设计模式.md) | KeyedService、Mojo、`chromium_src` 等模式速查 |
 
 **路径约定**
 
@@ -97,7 +97,7 @@ Webium 侧 **`WebUIBrowserSidePanelUI`** 上游 **`Toggle`** 可能为空；工�
 | C5 | `chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc` | 在合适生命周期调用 `xenon::EnsureXenonBrowserContextKeyedServiceFactoriesBuilt()` |
 | C6 | `xenon_overlay/chrome/browser/xenon_ai/xenon_ai_service_factory.*`、`xenon_ai_service.*` | `ProfileKeyedServiceFactory` + 占位/后续扩展的 `XenonAIService` |
 
-**与侧栏的关系**：侧栏 **能打开** 只要求 **registry + WebUI**；**对话/模型** 等重逻辑应落在 **Service**（见 `xenon_ai_integration.md` §1），避免塞进 Renderer。
+**与侧栏的关系**：侧栏 **能打开** 只要求 **registry + WebUI**；**对话/模型** 等重逻辑应落在 **Service**（见 `Xenon_AI集成参考.md` §1），避免塞进 Renderer。
 
 ### 4.3 全局 registry 与视图工厂
 
@@ -172,7 +172,7 @@ Local AI 解决的是 **Renderer 内 WASM 嵌入向量** 等能力，**主叙事
 | E4 | Mojo | `local_ai.mojom`：`PassageEmbedderFactory` / `GetPassageEmbedder` 等 |
 | E5 | 浏览器绑定 | `brave_content_browser_client.cc` 等 `RegisterWebUIControllerInterfaceBinder` |
 
-**与 Xenon 的启示**：若将来 Xenon 做 **本地小模型**，应 **单独一条服务线 + 单独 mojom**，不要与 **侧栏对话 WebUI** 混成单一巨型接口（`xenon_ai_integration.md` §5）。
+**与 Xenon 的启示**：若将来 Xenon 做 **本地小模型**，应 **单独一条服务线 + 单独 mojom**，不要与 **侧栏对话 WebUI** 混成单一巨型接口（`Xenon_AI集成参考.md` §5）。
 
 ---
 
@@ -191,7 +191,7 @@ Local AI 解决的是 **Renderer 内 WASM 嵌入向量** 等能力，**主叙事
 
 ## 8. 分层边界（摘要）
 
-**只做摘要**，避免与 [`xenon_ai_integration.md`](./xenon_ai_integration.md) 重复：
+**只做摘要**，避免与 [`Xenon_AI集成参考.md`](./Xenon_AI集成参考.md) 重复：
 
 - **侧栏 WebUI**：展示与轻逻辑；重状态进 **`ProfileKeyedService`**。
 - **`window.xenon`**：薄；打开侧栏、裁剪后的页面上下文；详见 Broker 文档。
@@ -216,7 +216,7 @@ Local AI 解决的是 **Renderer 内 WASM 嵌入向量** 等能力，**主叙事
 
 ## 10. Xenon AI 实现速查（相对 `chromium/src`）
 
-与 [`xenon_ai_integration.md`](./xenon_ai_integration.md) **附录 C.4（Xenon AI 骨架实现路径）** 一致，此处按 **流程顺序** 再列一遍，便于打印：
+与 [`Xenon_AI集成参考.md`](./Xenon_AI集成参考.md) **附录 C.4（Xenon AI 骨架实现路径）** 一致，此处按 **流程顺序** 再列一遍，便于打印：
 
 | 顺序 | 路径 |
 |------|------|

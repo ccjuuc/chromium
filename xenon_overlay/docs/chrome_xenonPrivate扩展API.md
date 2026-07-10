@@ -97,7 +97,7 @@ if (!chrome?.xenonPrivate?.ping) {
 4. 在 **`extensions/browser/extension_function_histogram_value.h`** 与 **`tools/metrics/histograms/metadata/extensions/enums.xml`** 中为该函数增加 **新枚举项**（仅追加，不改序）。
 5. **同一 permission** 下通常 **不必** 再改 `api_permission_id.mojom`；若引入全新 permission 字符串则需完整走 permission 注册链路。
 
-逐步拆解（含 metrics 脚本、单测 `permission_set_unittest.cc` 等）见 **`xenon_overlay_architecture.md` §6.6–6.7**。
+逐步拆解（含 metrics 脚本、单测 `permission_set_unittest.cc` 等）见 **`Xenon_Overlay架构与实现参考.md` §6.6–6.7**。
 
 ---
 
@@ -115,5 +115,5 @@ if (!chrome?.xenonPrivate?.ping) {
 
 ## 5. 延伸阅读
 
-- 架构上下文与文件索引：**`xenon_overlay_architecture.md`** → [§6 内置扩展](xenon_overlay_architecture.md#6-内置扩展component-extension)、[§6.6 添加自定义 Extension API](xenon_overlay_architecture.md#66-添加自定义-extension-api-的详细步骤)、[§6.7 示例文件表](xenon_overlay_architecture.md#67-示例chromexenonprivate-涉及文件)。
-- **AI 与侧栏、与扩展 API 分工：** **`xenon_ai_integration.md`** → [总目录与分层](xenon_ai_integration.md#目录)。
+- 架构上下文与文件索引：**`Xenon_Overlay架构与实现参考.md`** → [§6 内置扩展](Xenon_Overlay架构与实现参考.md#6-内置扩展component-extension)、[§6.6 添加自定义 Extension API](Xenon_Overlay架构与实现参考.md#66-添加自定义-extension-api-的详细步骤)、[§6.7 示例文件表](Xenon_Overlay架构与实现参考.md#67-示例chromexenonprivate-涉及文件)。
+- **AI 与侧栏、与扩展 API 分工：** **`Xenon_AI集成参考.md`** → [总目录与分层](Xenon_AI集成参考.md#目录)。

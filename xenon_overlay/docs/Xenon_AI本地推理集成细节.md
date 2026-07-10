@@ -282,5 +282,5 @@ ApplyInferencerRewriteOnWebContents(WebContents*, success, text)
 
 ## 11. 与仓库其他文档的关系
 
-- 侧栏、Mojo、菜单产品向说明：仍以 **`xenon_ai_integration.md`**、**`xenon_ai_side_panel_context_menu_changelog.md`** 等为准。
+- 侧栏、Mojo、菜单产品向说明：仍以 **`Xenon_AI集成参考.md`**、**`Xenon_AI侧栏与右键菜单改动说明.md`** 等为准。
 - **本文档**聚焦 **`e676bce`** 引入的 **burn sidecar + 浏览器管道 + 右键写回** 的工程细节；若后续提交修改协议或路径，请同步更新本节或于文末追加「修订历史」。

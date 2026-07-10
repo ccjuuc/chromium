@@ -1,8 +1,8 @@
 # Xenon AI 集成参考（独立文档）
 
-**端到端流程、Webium 时序、Brave Leo/Local AI 逐步对照**（细粒度、按调用链展开）见同目录 [**`xenon_ai_brave_components_reference.md`**](./xenon_ai_brave_components_reference.md)。  
-**KeyedService / ProfileKeyedServiceFactory 详解与 Xenon AI 示例** 见 [**`keyed_service_guide.md`**](./keyed_service_guide.md)。  
-**侧栏 WebUI + 网页右键菜单 + Mojo 传参（本轮变更说明）** 见 [**`xenon_ai_side_panel_context_menu_changelog.md`**](./xenon_ai_side_panel_context_menu_changelog.md)。
+**端到端流程、Webium 时序、Brave Leo/Local AI 逐步对照**（细粒度、按调用链展开）见同目录 [**`Xenon_AI与Brave组件流程对照.md`**](./Xenon_AI与Brave组件流程对照.md)。  
+**KeyedService / ProfileKeyedServiceFactory 详解与 Xenon AI 示例** 见 [**`KeyedService详解.md`**](./KeyedService详解.md)。  
+**侧栏 WebUI + 网页右键菜单 + Mojo 传参（本轮变更说明）** 见 [**`Xenon_AI侧栏与右键菜单改动说明.md`**](./Xenon_AI侧栏与右键菜单改动说明.md)。
 
 本文 **仅讨论 AI / 侧栏 / 对话与本地嵌入**，与 Xenon 其它能力（Utility Mojo、`XenonWebDialog`、提醒等）解耦。实现时请优先遵守文中的 **分层边界**，避免把重逻辑塞进 `window.xenon` 或扩展 API。
 
@@ -15,7 +15,7 @@
 
 ## 目录
 
-0. [**流程导向：Brave 组件与 Xenon 端到端对照**](./xenon_ai_brave_components_reference.md)（独立长文，按调用链展开）
+0. [**流程导向：Brave 组件与 Xenon 端到端对照**](./Xenon_AI与Brave组件流程对照.md)（独立长文，按调用链展开）
 1. [Xenon 侧推荐分层](#1-xenon-侧推荐分层)
 2. [与 `window.xenon`、`chrome.xenonPrivate` 的边界](#2-与-windowxenonchromexenonprivate-的边界)
 3. [Chromium 上游：Side Panel](#3-chromium-上游side-panel)
@@ -50,7 +50,7 @@
 | **`window.xenon`**（帧级 Mojo） | 打开/关闭 AI 侧栏、传递经 Browser 裁剪的页面上下文、轻量探测 | 长连接对话协议、模型列表主数据 |
 | **`chrome.xenonPrivate`**（组件扩展） | 工具栏/扩展上下文调 Browser | 与 Service 重复实现两套业务 |
 
-详细注入与 Broker 原理见 [`xenon_page_api_browser_interface_broker.md`](./xenon_page_api_browser_interface_broker.md)。扩展权限见 [`chrome_xenon_private_api.md`](./chrome_xenon_private_api.md)。
+详细注入与 Broker 原理见 [`window_xenon与BrowserInterfaceBroker备忘.md`](./window_xenon与BrowserInterfaceBroker备忘.md)。扩展权限见 [`chrome_xenonPrivate扩展API.md`](./chrome_xenonPrivate扩展API.md)。
 
 ---
 
@@ -272,9 +272,9 @@ if (base::FeatureList::IsEnabled(history_embeddings::kHistoryEmbeddings)) {
 
 | 主题 | 文档 |
 |------|------|
-| 总架构（非 AI） | [`xenon_overlay_architecture.md`](./xenon_overlay_architecture.md) |
-| `window.xenon` / Broker | [`xenon_page_api_browser_interface_broker.md`](./xenon_page_api_browser_interface_broker.md) |
-| `chrome.xenonPrivate` | [`chrome_xenon_private_api.md`](./chrome_xenon_private_api.md) |
+| 总架构（非 AI） | [`Xenon_Overlay架构与实现参考.md`](./Xenon_Overlay架构与实现参考.md) |
+| `window.xenon` / Broker | [`window_xenon与BrowserInterfaceBroker备忘.md`](./window_xenon与BrowserInterfaceBroker备忘.md) |
+| `chrome.xenonPrivate` | [`chrome_xenonPrivate扩展API.md`](./chrome_xenonPrivate扩展API.md) |
 
 ### C.4 Xenon AI 骨架实现路径（Chromium 树 + overlay）
 

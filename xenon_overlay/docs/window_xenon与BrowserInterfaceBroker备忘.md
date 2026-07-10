@@ -2,7 +2,7 @@
 
 本文整理 **feature/xenon-overlay** 中「页面 JS ↔ 浏览器进程」这条链路的实现细节，重点说明 **`BrowserInterfaceBroker` 的用法与原理**，并与 **Brave 钱包** 的同类模式对照，便于口述设计与排障。
 
-**AI / 侧栏 / `KeyedService` 分层** 与 **`window.xenon` 应保持薄封装** 的约定，见独立文档 [**`xenon_ai_integration.md`**](./xenon_ai_integration.md)（本文不展开对话、SSE、侧栏注册）。
+**AI / 侧栏 / `KeyedService` 分层** 与 **`window.xenon` 应保持薄封装** 的约定，见独立文档 [**`Xenon_AI集成参考.md`**](./Xenon_AI集成参考.md)（本文不展开对话、SSE、侧栏注册）。
 
 ---
 
