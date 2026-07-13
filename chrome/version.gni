@@ -59,8 +59,7 @@ if (target_os == "android") {
     if (is_desktop_android) {
       _version_dictionary_template +=
           "chrome_desktop_version_code = \"@CHROME_DESKTOP_VERSION_CODE@\" "
-      _version_dictionary_template +=
-          "chrome_desktop_beta_version_code = \"@CHROME_DESKTOP_BETA_VERSION_CODE@\" "
+      _version_dictionary_template += "chrome_desktop_beta_version_code = \"@CHROME_DESKTOP_BETA_VERSION_CODE@\" "
     }
     _version_dictionary_template +=
         "chrome_32_version_code = \"@CHROME_32_VERSION_CODE@\" "
@@ -88,8 +87,10 @@ if (target_os == "android") {
         "trichrome_auto_64_version_code = \"@TRICHROME_AUTO_64_VERSION_CODE@\" "
     _version_dictionary_template += "trichrome_desktop_64_version_code = \"@TRICHROME_DESKTOP_64_VERSION_CODE@\" "
     if (target_cpu == "arm64") {
-      _version_dictionary_template += "chrome_high_version_code = \"@CHROME_HIGH_VERSION_CODE@\" "
-      _version_dictionary_template += "chrome_high_beta_version_code = \"@CHROME_HIGH_BETA_VERSION_CODE@\" "
+      _version_dictionary_template +=
+          "chrome_high_version_code = \"@CHROME_HIGH_VERSION_CODE@\" "
+      _version_dictionary_template +=
+          "chrome_high_beta_version_code = \"@CHROME_HIGH_BETA_VERSION_CODE@\" "
       _version_dictionary_template += "trichrome_64_32_high_version_code = \"@TRICHROME_64_32_HIGH_VERSION_CODE@\" "
       _version_dictionary_template += "trichrome_auto_64_32_high_version_code = \"@TRICHROME_AUTO_64_32_HIGH_VERSION_CODE@\" "
     }
@@ -261,7 +262,7 @@ if (is_android && current_toolchain == default_toolchain) {
   if (defined(chrome_desktop_version_code)) {
     lines_to_write += [
       "ChromeDesktop: $chrome_desktop_version_code",
-      "ChromeDesktopOpenBeta: $chrome_desktop_beta_version_code"
+      "ChromeDesktopOpenBeta: $chrome_desktop_beta_version_code",
     ]
   }
 
@@ -477,3 +478,151 @@ if (is_android) {
     false_false_false_false = "1"
   }
 }
+
+# Args: //xenon_overlay/buildflags/features.gni (custom_exe_name, etc.)
+import("//xenon_overlay/buildflags/features.gni")
+if (custom_exe_name == "") {
+  resolved_exe_name = "chrome"
+} else {
+  resolved_exe_name = custom_exe_name
+}
+
+if (custom_dll_name == "") {
+  resolved_dll_name = "chrome"
+} else {
+  resolved_dll_name = custom_dll_name
+}
+
+# Custom display/package version only. Do NOT overwrite chrome_version_* used by
+# Chromium internals (policy generation filters by chrome_version_major, etc.).
+chrome_custom_version_args = []
+if (custom_version_string != "") {
+  _custom_version_parts = string_split(custom_version_string, ".")
+  _custom_version_part_count = 0
+  foreach(_custom_version_part, _custom_version_parts) {
+    assert(_custom_version_part != "",
+           "custom_version_string contains an empty version component")
+    _custom_version_part_count += 1
+  }
+  assert(_custom_version_part_count == 4,
+         "custom_version_string must be MAJOR.MINOR.BUILD.PATCH")
+
+  chrome_custom_version_args = [
+    "-e",
+    "MAJOR=${_custom_version_parts[0]}",
+    "-e",
+    "MINOR=${_custom_version_parts[1]}",
+    "-e",
+    "BUILD=${_custom_version_parts[2]}",
+    "-e",
+    "PATCH=${_custom_version_parts[3]}",
+  ]
+  resolved_version = custom_version_string
+} else {
+  resolved_version = chrome_version_full
+}
+
+if (use_version_in_filenames) {
+  chrome_exe_filename_base = "${resolved_exe_name}_${resolved_version}"
+  chrome_dll_filename_base = "${resolved_dll_name}_${resolved_version}"
+} else {
+  chrome_exe_filename_base = resolved_exe_name
+  chrome_dll_filename_base = resolved_dll_name
+}
+
+_use_custom_binary_names =
+    custom_exe_name != "" || custom_dll_name != "" || use_version_in_filenames
+
+_use_custom_install_identity =
+    custom_exe_name != "" || custom_product_name != ""
+
+if (_use_custom_install_identity) {
+  if (custom_product_name != "") {
+    chrome_install_product_name = custom_product_name
+  } else {
+    chrome_install_product_name = resolved_exe_name
+  }
+  chrome_install_product_path_name = chrome_install_product_name
+  chrome_install_base_app_id = chrome_install_product_name
+  chrome_install_browser_prog_id_prefix = "${chrome_install_product_name}HTM"
+  chrome_install_pdf_prog_id_prefix = "${chrome_install_product_name}PDF"
+  if (custom_exe_name != "") {
+    _identity_token = resolved_exe_name
+  } else {
+    _identity_token = chrome_install_product_name
+  }
+  chrome_install_direct_launch_url_scheme = _identity_token
+  chrome_install_safe_browsing_name = _identity_token
+} else {
+  chrome_install_product_name = "Chromium"
+  chrome_install_product_path_name = "Chromium"
+  chrome_install_base_app_id = "Chromium"
+  chrome_install_browser_prog_id_prefix = "ChromiumHTM"
+  chrome_install_pdf_prog_id_prefix = "ChromiumPDF"
+  chrome_install_direct_launch_url_scheme = "chromium"
+  chrome_install_safe_browsing_name = "chromium"
+}
+
+chrome_visual_elements_manifest_name =
+    "${chrome_exe_filename_base}.VisualElementsManifest.xml"
+
+# Mac app/framework names follow the product name and never include a version
+# filename suffix. Linux uses the versioned binary basename when requested.
+if (is_mac) {
+  _custom_exe_define_value = chrome_install_product_name
+  _custom_dll_define_value = chrome_install_product_name
+} else if (is_win) {
+  _custom_exe_define_value = "${chrome_exe_filename_base}.exe"
+  _custom_dll_define_value = "${chrome_dll_filename_base}.dll"
+} else {
+  _custom_exe_define_value = chrome_exe_filename_base
+  _custom_dll_define_value = chrome_dll_filename_base
+}
+
+chrome_custom_version_and_branding_args = chrome_custom_version_args
+if (_use_custom_install_identity) {
+  chrome_custom_version_and_branding_args += [
+    "-e",
+    "PRODUCT_FULLNAME=\"${chrome_install_product_name}\"",
+    "-e",
+    "PRODUCT_SHORTNAME=\"${chrome_install_product_name}\"",
+  ]
+}
+
+chrome_custom_names_defines = []
+if (_use_custom_binary_names || _use_custom_install_identity) {
+  chrome_custom_names_defines = [
+    "CUSTOM_CHROME_EXE_NAME=\"${_custom_exe_define_value}\"",
+    "CUSTOM_CHROME_DLL_NAME=\"${_custom_dll_define_value}\"",
+  ]
+  if (is_win) {
+    chrome_custom_names_defines += [
+      "CUSTOM_CHROME_EXE_NAME_W=L\"${_custom_exe_define_value}\"",
+      "CUSTOM_CHROME_DLL_NAME_W=L\"${_custom_dll_define_value}\"",
+    ]
+  }
+}
+if (custom_version_string != "") {
+  chrome_custom_names_defines +=
+      [ "CUSTOM_CHROME_VERSION_STRING=\"${resolved_version}\"" ]
+}
+
+chrome_custom_install_identity_defines = []
+if (is_win && _use_custom_install_identity) {
+  chrome_custom_install_identity_defines = [
+    "CUSTOM_CHROME_PRODUCT_NAME_W=L\"${chrome_install_product_name}\"",
+    "CUSTOM_CHROME_PRODUCT_PATH_NAME_W=L\"${chrome_install_product_path_name}\"",
+    "CUSTOM_CHROME_BASE_APP_ID_W=L\"${chrome_install_base_app_id}\"",
+    "CUSTOM_CHROME_BROWSER_PROG_ID_PREFIX_W=L\"${chrome_install_browser_prog_id_prefix}\"",
+    "CUSTOM_CHROME_BROWSER_PROG_ID_DESCRIPTION_W=L\"${chrome_install_product_name} HTML Document\"",
+    "CUSTOM_CHROME_DIRECT_LAUNCH_URL_SCHEME=\"${chrome_install_direct_launch_url_scheme}\"",
+    "CUSTOM_CHROME_PDF_PROG_ID_PREFIX_W=L\"${chrome_install_pdf_prog_id_prefix}\"",
+    "CUSTOM_CHROME_PDF_PROG_ID_DESCRIPTION_W=L\"${chrome_install_product_name} PDF Document\"",
+    "CUSTOM_CHROME_SAFE_BROWSING_NAME=\"${chrome_install_safe_browsing_name}\"",
+    "CUSTOM_CHROME_VISUAL_ELEMENTS_MANIFEST_W=L\"${chrome_visual_elements_manifest_name}\"",
+    "CUSTOM_CHROME_INSTALLATION_REG_KEY_W=L\"Software\\\\${chrome_install_product_path_name}\"",
+  ]
+}
+
+chrome_custom_win_defines =
+    chrome_custom_names_defines + chrome_custom_install_identity_defines

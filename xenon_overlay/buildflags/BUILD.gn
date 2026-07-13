@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//build/buildflag_header.gni")
+import("//chrome/version.gni")
 import("//xenon_overlay/buildflags/features.gni")
 
 buildflag_header("buildflags") {
@@ -15,4 +16,18 @@ buildflag_header("buildflags") {
     "ENABLE_XENON_AI=$enable_xenon_ai",
     "ENABLE_XENON_NODE_UV_COMPAT=$enable_xenon_node_uv_compat",
   ]
+}
+
+# Compiler defines for custom binary / product naming. Prefer these configs
+# over inlining chrome_custom_*_defines in each target.
+config("custom_names") {
+  defines = chrome_custom_names_defines
+}
+
+config("custom_install_identity") {
+  defines = chrome_custom_install_identity_defines
+}
+
+config("custom_win") {
+  defines = chrome_custom_win_defines
 }

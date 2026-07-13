@@ -10,7 +10,12 @@ namespace installer {
 const wchar_t kChromeArchive[] = L"chrome.7z";
 const wchar_t kChromeCompressedArchive[] = L"chrome.packed.7z";
 const char kVisualElements[] = "VisualElements";
+#if defined(CUSTOM_CHROME_VISUAL_ELEMENTS_MANIFEST_W)
+const wchar_t kVisualElementsManifest[] =
+    CUSTOM_CHROME_VISUAL_ELEMENTS_MANIFEST_W;
+#else
 const wchar_t kVisualElementsManifest[] = L"chrome.VisualElementsManifest.xml";
+#endif
 
 // Sub directory of install source package under install temporary directory.
 const wchar_t kInstallSourceDir[] = L"source";

@@ -30,6 +30,8 @@ if (is_win) {
       "//chrome/chrome_elf:nt_registry",
     ]
 
+    configs += [ "//xenon_overlay/buildflags:custom_install_identity" ]
+
     sources = [
       "../app/chrome_dll_resource.h",
       "../common/chrome_icon_resources_win.h",

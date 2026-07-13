@@ -38,3 +38,25 @@ declare_args() {
   # When true, pass --no-default-features --features backend_ndarray (CPU; smaller binary).
   xenon_ai_inferencer_burn_cpu_only = false
 }
+
+# Product / binary naming (consumed by //chrome/version.gni).
+declare_args() {
+  # Custom executable basename. Empty defaults to "chrome".
+  custom_exe_name = ""
+
+  # Custom chrome dll basename on Windows. Empty defaults to "chrome". Mac
+  # framework names follow the product name.
+  custom_dll_name = ""
+
+  # Append version to exe/dll filenames. Mac app/framework names never get a
+  # version suffix.
+  use_version_in_filenames = false
+
+  # Display/package version (MAJOR.MINOR.BUILD.PATCH). Does not overwrite
+  # chrome_version_* used by Chromium internals.
+  custom_version_string = ""
+
+  # Display / install product name. Empty derives from custom_exe_name, or
+  # "Chromium" when neither is set. AppId / ProgIDs / registry path are derived.
+  custom_product_name = ""
+}

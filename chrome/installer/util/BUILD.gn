@@ -190,6 +190,8 @@ static_library("with_no_strings") {
       "//third_party/icu",
     ]
 
+    configs += [ "//xenon_overlay/buildflags:custom_install_identity" ]
+
     libs = [
       "urlmon.lib",
       "wtsapi32.lib",
@@ -259,6 +261,7 @@ source_set("constants") {
     ]
 
     public_deps = [ "//base" ]
+    configs += [ "//xenon_overlay/buildflags:custom_names" ]
   }
 }
 

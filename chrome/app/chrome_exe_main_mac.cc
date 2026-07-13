@@ -174,13 +174,26 @@ __attribute__((visibility("default"))) int main(int argc, char* argv[]) {
     }
   }
 
+#if defined(CUSTOM_CHROME_DLL_NAME)
+#define MAC_FRAMEWORK_NAME CUSTOM_CHROME_DLL_NAME
+#else
+#define MAC_FRAMEWORK_NAME PRODUCT_FULLNAME_STRING
+#endif
+
+#if defined(CUSTOM_CHROME_VERSION_STRING)
+#define MAC_FRAMEWORK_VERSION CUSTOM_CHROME_VERSION_STRING
+#else
+#define MAC_FRAMEWORK_VERSION CHROME_VERSION_STRING
+#endif
+
+#if defined(HELPER_EXECUTABLE)
   // The helper lives within the versioned framework directory, so simply
   // go up to find the main dylib.
-  const char rel_path[] = "../../../../" PRODUCT_FULLNAME_STRING " Framework";
+  const char rel_path[] = "../../../../" MAC_FRAMEWORK_NAME " Framework";
 #else
-  const char rel_path[] = "../Frameworks/" PRODUCT_FULLNAME_STRING
-                          " Framework.framework/Versions/" CHROME_VERSION_STRING
-                          "/" PRODUCT_FULLNAME_STRING " Framework";
+  const char rel_path[] = "../Frameworks/" MAC_FRAMEWORK_NAME
+                          " Framework.framework/Versions/" MAC_FRAMEWORK_VERSION
+                          "/" MAC_FRAMEWORK_NAME " Framework";
 #endif  // defined(HELPER_EXECUTABLE)
 
   // Slice off the last part of the main executable path, and append the

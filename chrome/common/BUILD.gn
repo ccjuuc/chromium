@@ -7,6 +7,7 @@ import("//build/config/chrome_build.gni")
 import("//build/util/process_version.gni")
 import("//chrome/browser/downgrade/buildflags.gni")
 import("//chrome/common/features.gni")
+import("//chrome/version.gni")
 import("//components/cdm/common/playready.gni")
 import("//components/offline_pages/buildflags/features.gni")
 import("//components/signin/features.gni")
@@ -442,6 +443,8 @@ process_version("version_header") {
   template_file = "chrome_version.h.in"
 
   output = "$target_gen_dir/chrome_version.h"
+
+  extra_args = chrome_custom_version_and_branding_args
 }
 
 # Separate out the constants that aren't intermingled with or dependent on code
@@ -462,6 +465,8 @@ static_library("non_code_constants") {
     "//base",
     "//content/public/common:buildflags",
   ]
+
+  configs += [ "//xenon_overlay/buildflags:custom_names" ]
 
   public_deps = [
     "//build:branding_buildflags",

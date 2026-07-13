@@ -83,6 +83,14 @@ def parse_common_args(
     parser.add_argument(
         "-o", "--output-dir", required=True, help="output directory")
     parser.add_argument("-t", "--target-os", required=True, help="target os")
+    parser.add_argument(
+        "--progname",
+        default=None,
+        help="Override PROGNAME (main browser binary basename).")
+    parser.add_argument(
+        "--menuname",
+        default=None,
+        help="Override MENUNAME (desktop menu display name).")
     return parser
 
 
@@ -333,6 +341,7 @@ class InstallerConfig:
                   output_dir: pathlib.Path) -> "InstallerConfig":
         data = cls._load_branding_and_version(output_dir, args.branding,
                                               args.channel)
+        cls._apply_custom_binary_overrides(data, args)
         data.update({
             "arch": args.arch,
             "target_os": args.target_os,
@@ -416,6 +425,20 @@ class InstallerConfig:
         return data
 
     @staticmethod
+    def _apply_custom_binary_overrides(data: dict[str, typing.Any],
+                                       args: argparse.Namespace) -> None:
+        """Apply optional custom binary/product name overrides from GN args."""
+        if getattr(args, "progname", None):
+            data["info_vars"]["PROGNAME"] = args.progname
+        if getattr(args, "menuname", None):
+            menuname = args.menuname
+            if data.get("channel") and data["channel"] != "stable":
+                menuname = f"{menuname} ({data['channel']})"
+            data["info_vars"]["MENUNAME"] = menuname
+            data["branding_vars"]["PRODUCT_FULLNAME"] = args.menuname
+            data["branding_vars"]["PRODUCT_SHORTNAME"] = args.menuname
+
+    @staticmethod
     def _compute_deb_repoconfig(arch: str, package: str) -> tuple[str, str]:
         base_repo_config = "dl.google.com/linux/chrome/deb/ stable main"
         default = f"deb [arch={arch}] https://{base_repo_config}"
@@ -452,8 +475,10 @@ class InstallerConfig:
                 ArtifactType.BINARY,
                 StandardPermissions.EXECUTABLE,
             ),
+            # Sandbox binary keeps the chrome_sandbox build name even when the
+            # main browser binary is renamed.
             Artifact(
-                f"{progname}_sandbox.stripped",
+                "chrome_sandbox.stripped",
                 "chrome-sandbox",
                 ArtifactType.BINARY,
                 StandardPermissions.SANDBOX,

@@ -14,8 +14,13 @@
 
 namespace {
 
+#if defined(CUSTOM_CHROME_EXE_NAME)
+constexpr base::FilePath::CharType kChromeExecutable[] =
+    FILE_PATH_LITERAL(CUSTOM_CHROME_EXE_NAME);
+#else
 constexpr base::FilePath::CharType kChromeExecutable[] =
     FILE_PATH_LITERAL("chrome.exe");
+#endif
 
 constexpr base::FilePath::CharType kChromeProxyExecutable[] =
     FILE_PATH_LITERAL("chrome_proxy.exe");

@@ -9,6 +9,7 @@ import("//build/config/locales.gni")
 import("//build/config/ozone.gni")
 import("//build/config/ui.gni")
 import("//chrome/common/features.gni")
+import("//chrome/version.gni")
 import("//crypto/features.gni")
 import("//tools/grit/grit_rule.gni")
 
@@ -105,11 +106,59 @@ if (is_android) {
   }
 }
 
+_branded_strings_source = "${branding_path_product}_strings.grd"
+_branded_strings_deps = []
+if (!is_chrome_branded && !is_chrome_for_testing_branded &&
+    (custom_exe_name != "" || custom_product_name != "")) {
+  _custom_translation_files = []
+  _custom_translation_locales = all_chrome_locales - pseudolocales - [ "en-US" ]
+  foreach(_locale, _custom_translation_locales) {
+    # Translation Console uses the legacy locale names for these two files.
+    if (_locale == "he") {
+      _locale = "iw"
+    } else if (_locale == "nb") {
+      _locale = "no"
+    }
+    _custom_translation_files += [ "resources/chromium_strings_${_locale}.xtb" ]
+  }
+
+  action("generate_custom_chromium_strings") {
+    script = "apply_custom_product_name.py"
+    inputs = [
+      "chromium_strings.grd",
+      "settings_chromium_strings.grdp",
+    ]
+    outputs = [
+      "$root_gen_dir/chrome/app/chromium_strings.grd",
+      "$root_gen_dir/chrome/app/settings_chromium_strings.grdp",
+    ]
+    foreach(_translation_file, _custom_translation_files) {
+      inputs += [ _translation_file ]
+      outputs += [ "$root_gen_dir/chrome/app/$_translation_file" ]
+    }
+    args = [
+      "--input",
+      rebase_path("chromium_strings.grd", root_build_dir),
+      "--output",
+      rebase_path(outputs[0], root_build_dir),
+      "--product-name",
+      chrome_install_product_name,
+
+      # Keep generated grit base_dir="."; rewrite relative inputs to source.
+      "--source-dir",
+      rebase_path(".", "$root_gen_dir/chrome/app"),
+    ]
+  }
+  _branded_strings_source = "$root_gen_dir/chrome/app/chromium_strings.grd"
+  _branded_strings_deps += [ ":generate_custom_chromium_strings" ]
+}
+
 grit_strings("branded_strings") {
-  source = "${branding_path_product}_strings.grd"
+  source = _branded_strings_source
   defines = chrome_grit_defines
   output_dir = "$root_gen_dir/chrome"
   outputs = [ "grit/branded_strings.h" ]
+  deps = _branded_strings_deps
 
   if (is_android) {
     create_android_resources = true

@@ -35,6 +35,7 @@ import("//build/util/process_version.gni")
 #     output = "$target_gen_dir/my_dll_version.rc"
 #     template_file = [ "//foo/bar/my_dll_version.rc.version" ]
 #   }
+import("//chrome/version.gni")
 template("process_version_rc_template") {
   if (defined(invoker.template_file)) {
     _template_file = invoker.template_file
@@ -50,14 +51,49 @@ template("process_version_rc_template") {
     _sources += invoker.sources
   }
 
+  _extra_args = chrome_custom_version_and_branding_args
+  if (custom_exe_name != "" || custom_dll_name != "" ||
+      custom_product_name != "" || custom_version_string != "" ||
+      use_version_in_filenames) {
+    # Developer builds normally use LASTCHANGE.dummy, which intentionally has
+    # no LASTCHANGE_YEAR. Custom product metadata must not ship the unresolved
+    # @LASTCHANGE_YEAR@ placeholder from the Chromium branding file.
+    _sources += [ "//build/util/LASTCHANGE" ]
+    _extra_args += [
+      "-e",
+      "COPYRIGHT=COPYRIGHT.replace(\"@LASTCHANGE_YEAR@\", LASTCHANGE_YEAR)",
+    ]
+  }
+  if (defined(invoker.extra_args)) {
+    _extra_args += invoker.extra_args
+  }
+
+  if (target_name == "chrome_exe_version") {
+    _extra_args += [
+      "-e",
+      "ORIGINAL_FILENAME=\"${chrome_exe_filename_base}.exe\"",
+      "-e",
+      "INTERNAL_NAME=\"${chrome_exe_filename_base}\"",
+    ]
+  } else if (target_name == "chrome_dll_version") {
+    _extra_args += [
+      "-e",
+      "ORIGINAL_FILENAME=\"${chrome_dll_filename_base}.dll\"",
+      "-e",
+      "INTERNAL_NAME=\"${chrome_dll_filename_base}\"",
+    ]
+  }
+
   process_version(target_name) {
     template_file = _template_file
     sources = _sources
+    extra_args = _extra_args
     forward_variables_from(invoker,
                            "*",
                            [
                              "sources",
                              "template_file",
+                             "extra_args",
                            ])
   }
 }

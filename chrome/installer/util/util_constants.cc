@@ -175,8 +175,17 @@ const char kVerboseLogging[] = "verbose-logging";
 // TODO(gab): Rename setup.exe itself altogether and use the same binary for
 // Active Setup.
 const wchar_t kActiveSetupExe[] = L"chrmstp.exe";
+#if defined(CUSTOM_CHROME_DLL_NAME_W)
+const wchar_t kChromeDll[] = CUSTOM_CHROME_DLL_NAME_W;
+#else
 const wchar_t kChromeDll[] = L"chrome.dll";
+#endif
+
+#if defined(CUSTOM_CHROME_EXE_NAME_W)
+const wchar_t kChromeExe[] = CUSTOM_CHROME_EXE_NAME_W;
+#else
 const wchar_t kChromeExe[] = L"chrome.exe";
+#endif
 const wchar_t kChromeNewExe[] = L"new_chrome.exe";
 const wchar_t kChromeOldExe[] = L"old_chrome.exe";
 const wchar_t kChromeProxyExe[] = L"chrome_proxy.exe";

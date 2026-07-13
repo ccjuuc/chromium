@@ -12,7 +12,11 @@
 
 namespace chrome {
 
+#if defined(CUSTOM_CHROME_VERSION_STRING)
+const char kChromeVersion[] = CUSTOM_CHROME_VERSION_STRING;
+#else
 const char kChromeVersion[] = CHROME_VERSION_STRING;
+#endif
 
 // The following should not be used for UI strings; they are meant
 // for system strings only. UI changes should be made in the GRD.
@@ -33,21 +37,42 @@ const char kChromeVersion[] = CHROME_VERSION_STRING;
 
 #if BUILDFLAG(IS_WIN)
 const base::FilePath::CharType kBrowserProcessExecutableName[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME);
+#else
     FPL("chrome.exe");
+#endif
 const base::FilePath::CharType kHelperProcessExecutableName[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME);
+#else
     FPL("chrome.exe");
+#endif
 #elif BUILDFLAG(IS_MAC)
 const base::FilePath::CharType kBrowserProcessExecutableName[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME);
+#else
     FPL(PRODUCT_FULLNAME_STRING);
+#endif
 const base::FilePath::CharType kHelperProcessExecutableName[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME " Helper");
+#else
     FPL(PRODUCT_FULLNAME_STRING " Helper");
+#endif
 #elif BUILDFLAG(IS_ANDROID)
 // NOTE: Keep it synced with the process names defined in AndroidManifest.xml.
 const base::FilePath::CharType kBrowserProcessExecutableName[] = FPL("chrome");
 const base::FilePath::CharType kHelperProcessExecutableName[] =
     FPL("sandboxed_process");
 #elif BUILDFLAG(IS_POSIX)
-const base::FilePath::CharType kBrowserProcessExecutableName[] = FPL("chrome");
+const base::FilePath::CharType kBrowserProcessExecutableName[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME);
+#else
+    FPL("chrome");
+#endif
 // Helper processes end up with a name of "exe" due to execing via
 // /proc/self/exe.  See bug 22703.
 const base::FilePath::CharType kHelperProcessExecutableName[] = FPL("exe");
@@ -55,12 +80,24 @@ const base::FilePath::CharType kHelperProcessExecutableName[] = FPL("exe");
 
 #if BUILDFLAG(IS_WIN)
 const base::FilePath::CharType kBrowserProcessExecutablePath[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME);
+#else
     FPL("chrome.exe");
+#endif
 const base::FilePath::CharType kHelperProcessExecutablePath[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME);
+#else
     FPL("chrome.exe");
+#endif
 #elif BUILDFLAG(IS_MAC)
 const base::FilePath::CharType kBrowserProcessExecutablePath[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME ".app/Contents/MacOS/" CUSTOM_CHROME_EXE_NAME);
+#else
     FPL(PRODUCT_FULLNAME_STRING ".app/Contents/MacOS/" PRODUCT_FULLNAME_STRING);
+#endif
 const base::FilePath::CharType
     kGoogleChromeForTestingBrowserProcessExecutablePath[] =
         FPL("Google Chrome for Testing.app/Contents/MacOS/Google Chrome for "
@@ -70,26 +107,54 @@ const base::FilePath::CharType kGoogleChromeBrowserProcessExecutablePath[] =
 const base::FilePath::CharType kChromiumBrowserProcessExecutablePath[] =
     FPL("Chromium.app/Contents/MacOS/Chromium");
 const base::FilePath::CharType kHelperProcessExecutablePath[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME
+        " Helper.app/Contents/MacOS/" CUSTOM_CHROME_EXE_NAME " Helper");
+#else
     FPL(PRODUCT_FULLNAME_STRING
         " Helper.app/Contents/MacOS/" PRODUCT_FULLNAME_STRING " Helper");
+#endif
 #elif BUILDFLAG(IS_ANDROID)
 const base::FilePath::CharType kBrowserProcessExecutablePath[] = FPL("chrome");
 const base::FilePath::CharType kHelperProcessExecutablePath[] = FPL("chrome");
 #elif BUILDFLAG(IS_POSIX)
-const base::FilePath::CharType kBrowserProcessExecutablePath[] = FPL("chrome");
-const base::FilePath::CharType kHelperProcessExecutablePath[] = FPL("chrome");
+const base::FilePath::CharType kBrowserProcessExecutablePath[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME);
+#else
+    FPL("chrome");
+#endif
+const base::FilePath::CharType kHelperProcessExecutablePath[] =
+#if defined(CUSTOM_CHROME_EXE_NAME)
+    FPL(CUSTOM_CHROME_EXE_NAME);
+#else
+    FPL("chrome");
+#endif
 #endif  // OS_*
 
 #if BUILDFLAG(IS_MAC)
 const base::FilePath::CharType kFrameworkName[] =
+#if defined(CUSTOM_CHROME_DLL_NAME)
+    FPL(CUSTOM_CHROME_DLL_NAME " Framework.framework");
+#else
     FPL(PRODUCT_FULLNAME_STRING " Framework.framework");
+#endif
 const base::FilePath::CharType kFrameworkExecutableName[] =
+#if defined(CUSTOM_CHROME_DLL_NAME)
+    FPL(CUSTOM_CHROME_DLL_NAME " Framework");
+#else
     FPL(PRODUCT_FULLNAME_STRING " Framework");
+#endif
 const char kMacHelperSuffixAlerts[] = " (Alerts)";
 #endif  // BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_WIN)
-const base::FilePath::CharType kBrowserResourcesDll[] = FPL("chrome.dll");
+const base::FilePath::CharType kBrowserResourcesDll[] =
+#if defined(CUSTOM_CHROME_DLL_NAME)
+    FPL(CUSTOM_CHROME_DLL_NAME);
+#else
+    FPL("chrome.dll");
+#endif
 const base::FilePath::CharType kElfDll[] = FPL("chrome_elf.dll");
 const base::FilePath::CharType kStatusTrayWindowClass[] =
     FPL("Chrome_StatusTrayWindow");

@@ -580,9 +580,13 @@ std::wstring InstallUtil::GetPublisherName() {
 
 // static
 std::wstring InstallUtil::GetShortcutName() {
+#if defined(CUSTOM_CHROME_PRODUCT_NAME_W)
+  return CUSTOM_CHROME_PRODUCT_NAME_W;
+#else
   // IDS_PRODUCT_NAME is automatically mapped to the mode-specific shortcut
   // name; see MODE_SPECIFIC_STRINGS in prebuild/create_string_rc.py.
   return installer::GetLocalizedString(IDS_PRODUCT_NAME_BASE);
+#endif
 }
 
 // static

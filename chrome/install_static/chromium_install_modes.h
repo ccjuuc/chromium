@@ -15,6 +15,51 @@
 
 namespace install_static {
 
+#if defined(CUSTOM_CHROME_PRODUCT_NAME_W)
+#define CHROMIUM_BASE_APP_NAME CUSTOM_CHROME_PRODUCT_NAME_W
+#else
+#define CHROMIUM_BASE_APP_NAME L"Chromium"
+#endif
+
+#if defined(CUSTOM_CHROME_BASE_APP_ID_W)
+#define CHROMIUM_BASE_APP_ID CUSTOM_CHROME_BASE_APP_ID_W
+#else
+#define CHROMIUM_BASE_APP_ID L"Chromium"
+#endif
+
+#if defined(CUSTOM_CHROME_BROWSER_PROG_ID_PREFIX_W)
+#define CHROMIUM_BROWSER_PROG_ID_PREFIX \
+  CUSTOM_CHROME_BROWSER_PROG_ID_PREFIX_W
+#else
+#define CHROMIUM_BROWSER_PROG_ID_PREFIX L"ChromiumHTM"
+#endif
+
+#if defined(CUSTOM_CHROME_BROWSER_PROG_ID_DESCRIPTION_W)
+#define CHROMIUM_BROWSER_PROG_ID_DESCRIPTION \
+  CUSTOM_CHROME_BROWSER_PROG_ID_DESCRIPTION_W
+#else
+#define CHROMIUM_BROWSER_PROG_ID_DESCRIPTION L"Chromium HTML Document"
+#endif
+
+#if defined(CUSTOM_CHROME_DIRECT_LAUNCH_URL_SCHEME)
+#define CHROMIUM_DIRECT_LAUNCH_URL_SCHEME \
+  CUSTOM_CHROME_DIRECT_LAUNCH_URL_SCHEME
+#else
+#define CHROMIUM_DIRECT_LAUNCH_URL_SCHEME "chromium"
+#endif
+
+#if defined(CUSTOM_CHROME_PDF_PROG_ID_PREFIX_W)
+#define CHROMIUM_PDF_PROG_ID_PREFIX CUSTOM_CHROME_PDF_PROG_ID_PREFIX_W
+#else
+#define CHROMIUM_PDF_PROG_ID_PREFIX L"ChromiumPDF"
+#endif
+
+#if defined(CUSTOM_CHROME_PDF_PROG_ID_DESCRIPTION_W)
+#define CHROMIUM_PDF_PROG_ID_DESCRIPTION CUSTOM_CHROME_PDF_PROG_ID_DESCRIPTION_W
+#else
+#define CHROMIUM_PDF_PROG_ID_DESCRIPTION L"Chromium PDF Document"
+#endif
+
 // Note: This list of indices must be kept in sync with the brand-specific
 // resource strings in chrome/installer/util/prebuild/create_string_rc.
 enum InstallConstantIndex {
@@ -34,15 +79,18 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .logo_suffix = L"",  // No logo suffix for the primary install mode.
         .app_guid =
             L"",  // Empty app_guid since no integration with Google Update.
-        .base_app_name = L"Chromium",              // A distinct base_app_name.
-        .base_app_id = L"Chromium",                // A distinct base_app_id.
-        .browser_prog_id_prefix = L"ChromiumHTM",  // Browser ProgID prefix.
+        .base_app_name = CHROMIUM_BASE_APP_NAME,  // A distinct base_app_name.
+        .base_app_id = CHROMIUM_BASE_APP_ID,      // A distinct base_app_id.
+        .browser_prog_id_prefix =
+            CHROMIUM_BROWSER_PROG_ID_PREFIX,  // Browser ProgID prefix.
         .browser_prog_id_description =
-            L"Chromium HTML Document",  // Browser ProgID description.
-        .direct_launch_url_scheme = "chromium",
-        .pdf_prog_id_prefix = L"ChromiumPDF",  // PDF ProgID prefix.
+            CHROMIUM_BROWSER_PROG_ID_DESCRIPTION,  // Browser ProgID
+                                                   // description.
+        .direct_launch_url_scheme = CHROMIUM_DIRECT_LAUNCH_URL_SCHEME,
+        .pdf_prog_id_prefix =
+            CHROMIUM_PDF_PROG_ID_PREFIX,  // PDF ProgID prefix.
         .pdf_prog_id_description =
-            L"Chromium PDF Document",  // PDF ProgID description.
+            CHROMIUM_PDF_PROG_ID_DESCRIPTION,  // PDF ProgID description.
         .active_setup_guid =
             L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup
                                                         // GUID.
@@ -95,6 +143,14 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
             L"924012148-",  // App container sid prefix for sandbox.
     },
 });
+
+#undef CHROMIUM_BASE_APP_NAME
+#undef CHROMIUM_BASE_APP_ID
+#undef CHROMIUM_BROWSER_PROG_ID_PREFIX
+#undef CHROMIUM_BROWSER_PROG_ID_DESCRIPTION
+#undef CHROMIUM_DIRECT_LAUNCH_URL_SCHEME
+#undef CHROMIUM_PDF_PROG_ID_PREFIX
+#undef CHROMIUM_PDF_PROG_ID_DESCRIPTION
 
 }  // namespace install_static
 

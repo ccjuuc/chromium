@@ -100,6 +100,8 @@ if (is_win) {
       "//chrome/installer/util:with_rc_strings",
     ]
 
+    configs += [ "//xenon_overlay/buildflags:custom_install_identity" ]
+
     deps = [
       "//base",
       "//build:branding_buildflags",

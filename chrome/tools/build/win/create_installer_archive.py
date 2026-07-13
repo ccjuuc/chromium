@@ -232,23 +232,24 @@ def GetLZMAExec(build_dir):
                         "host_platform", executable)
 
 
-def GetPrevVersion(build_dir, temp_dir, last_chrome_installer, output_name):
+def GetPrevVersion(build_dir, temp_dir, last_chrome_installer, output_name, custom_dll_name=None):
     if not last_chrome_installer:
         return ''
 
     lzma_exec = GetLZMAExec(build_dir)
     prev_archive_file = os.path.join(last_chrome_installer,
                                      output_name + ARCHIVE_SUFFIX)
+    dll_filename = custom_dll_name if custom_dll_name else 'chrome.dll'
     cmd = [
         lzma_exec,
         'x',
         '-o"%s"' % temp_dir,
         prev_archive_file,
-        'Chrome-bin/*/chrome.dll',
+        'Chrome-bin/*/' + dll_filename,
     ]
     RunSystemCommand(cmd, options.verbose)
     dll_path = glob.glob(os.path.join(temp_dir, 'Chrome-bin', '*',
-                                      'chrome.dll'))
+                                      dll_filename))
     return os.path.split(os.path.split(dll_path[0])[0])[1]
 
 
@@ -263,7 +264,7 @@ def MakeStagingDirectory(staging_dir):
     return file_path
 
 
-def Readconfig(input_file, current_version):
+def Readconfig(input_file, current_version, custom_exe_name=None, custom_dll_name=None):
     """Reads config information from input file after setting default value of
     global variables.
     """
@@ -273,6 +274,19 @@ def Readconfig(input_file, current_version):
                                            current_version)
     config = configparser.ConfigParser(variables)
     config.read(input_file)
+
+    if custom_exe_name or custom_dll_name:
+        for section in config.sections():
+            if custom_exe_name:
+                if config.has_option(section, 'chrome.exe'):
+                    val = config.get(section, 'chrome.exe')
+                    config.remove_option(section, 'chrome.exe')
+                    config.set(section, custom_exe_name, val)
+            if custom_dll_name:
+                if config.has_option(section, 'chrome.dll'):
+                    val = config.get(section, 'chrome.dll')
+                    config.remove_option(section, 'chrome.dll')
+                    config.set(section, custom_dll_name, val)
     return config
 
 
@@ -599,15 +613,17 @@ def main(options):
     """Main method that reads input file, creates archive file and writes
     resource input file.
     """
-    current_version = BuildVersion()
+    current_version = options.custom_version or BuildVersion()
 
-    config = Readconfig(options.input_file, current_version)
+    config = Readconfig(options.input_file, current_version,
+                        options.custom_exe_name, options.custom_dll_name)
 
     staging_dir = MakeStagingDirectory(options.staging_dir)
 
     prev_version = GetPrevVersion(options.build_dir, staging_dir,
                                   options.last_chrome_installer,
-                                  options.output_name)
+                                  options.output_name,
+                                  options.custom_dll_name)
 
     # Copy the files from the build dir.
     CopyAllFilesToStagingDir(config, options.distribution, staging_dir,
@@ -769,6 +785,15 @@ def _ParseOptions():
         '--build_time',
         help='Epoch second in string. If set, overwrite the timestamp for '
         'files archived, to keep output artifacts deterministic.')
+    parser.add_option('--custom_exe_name',
+                      default=None,
+                      help='Custom name for the chrome executable file.')
+    parser.add_option('--custom_dll_name',
+                      default=None,
+                      help='Custom name for the chrome dll file.')
+    parser.add_option('--custom_version',
+                      default=None,
+                      help='Version used for the installer version directory.')
     parser.add_option('-v',
                       '--verbose',
                       action='store_true',

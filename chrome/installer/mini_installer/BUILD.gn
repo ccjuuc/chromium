@@ -7,6 +7,8 @@ import("//build/config/python.gni")
 import("//build/config/ui.gni")
 import("//build/timestamp.gni")
 import("//chrome/process_version_rc_template.gni")
+import("//chrome/version.gni")
+
 import("//third_party/dawn/scripts/dawn_features.gni")
 import("//third_party/ffmpeg/ffmpeg_options.gni")
 import("//third_party/icu/config.gni")
@@ -145,9 +147,9 @@ action("mini_installer_archive") {
   release_file = "chrome.release"
 
   inputs = [
-    "$root_out_dir/chrome.dll",
+    "$root_out_dir/${chrome_dll_filename_base}.dll",
     "$root_out_dir/chrome_elf.dll",
-    "$root_out_dir/chrome.exe",
+    "$root_out_dir/${chrome_exe_filename_base}.exe",
     "$root_out_dir/locales/en-US.pak",
     "$root_out_dir/setup.exe",
     "//chrome/tools/build/win/makecab.py",
@@ -179,6 +181,9 @@ action("mini_installer_archive") {
     rebase_path(setup_runtime_deps, root_build_dir),
     "--build_time",
     build_timestamp,
+    "--custom_exe_name=${chrome_exe_filename_base}.exe",
+    "--custom_dll_name=${chrome_dll_filename_base}.dll",
+    "--custom_version=$resolved_version",
 
     # Optional argument for verbose archiving output.
     #"--verbose",
