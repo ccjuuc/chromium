@@ -20,6 +20,11 @@ inline constexpr char kReloginPresentation[] = "xenon.relogin_presentation";
 inline constexpr char kAiSidePanelToolbarPinMigrated[] =
     "xenon.ai_side_panel_toolbar_pin_migrated";
 
+// Whether the Xenon browser sidebar should auto-hide and appear from the active
+// edge hot zone.
+inline constexpr char kSidebarAutoHideEnabled[] =
+    "xenon.sidebar_auto_hide_enabled";
+
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
 }  // namespace xenon::prefs

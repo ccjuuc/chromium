@@ -299,6 +299,7 @@
 #include "ui/compositor/paint_recorder.h"
 #include "ui/content_accelerators/accelerator_util.h"
 #include "ui/display/screen.h"
+#include "ui/events/event_observer.h"
 #include "ui/events/event_utils.h"
 #include "ui/gfx/animation/animation_runner.h"
 #include "ui/gfx/canvas.h"
@@ -317,6 +318,7 @@
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/views/event_monitor.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view.h"
@@ -328,6 +330,7 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/views/window/hit_test_utils.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
@@ -379,6 +382,10 @@
 #if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
 #include "chrome/browser/ui/views/frame/webui_tab_strip_container_view.h"
 #endif  // BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/ui/views/sidebar/xenon_sidebar_view.h"
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
 
 using base::UserMetricsAction;
 using content::WebContents;
@@ -843,6 +850,41 @@ class BrowserView::AccessibilityModeObserver : public ui::AXModeObserver {
       ax_mode_observation_{this};
 };
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+class BrowserView::XenonBrowserWindowMouseEventHandler
+    : public ui::EventObserver {
+ public:
+  explicit XenonBrowserWindowMouseEventHandler(BrowserView* browser_view)
+      : browser_view_(browser_view) {
+    auto* widget = browser_view_->GetWidget();
+    CHECK(widget && widget->GetNativeWindow());
+
+    monitor_ = views::EventMonitor::CreateApplicationMonitor(
+        this, widget->GetNativeWindow(), {ui::EventType::kMouseMoved});
+  }
+
+  XenonBrowserWindowMouseEventHandler(
+      const XenonBrowserWindowMouseEventHandler&) = delete;
+  XenonBrowserWindowMouseEventHandler& operator=(
+      const XenonBrowserWindowMouseEventHandler&) = delete;
+  ~XenonBrowserWindowMouseEventHandler() override = default;
+
+ private:
+  // ui::EventObserver:
+  void OnEvent(const ui::Event& event) override {
+    if (event.type() != ui::EventType::kMouseMoved) {
+      return;
+    }
+
+    browser_view_->HandleXenonSidebarBrowserWindowMouseEvent(
+        *event.AsMouseEvent());
+  }
+
+  raw_ptr<BrowserView> browser_view_ = nullptr;
+  std::unique_ptr<views::EventMonitor> monitor_;
+};
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
+
 ///////////////////////////////////////////////////////////////////////////////
 // BrowserView, public:
 
@@ -944,6 +986,13 @@ BrowserView::BrowserView(Browser* browser)
   toolbar_height_side_panel_ = AddChildView(std::make_unique<SidePanel>(
       this, SidePanelEntry::PanelType::kToolbar, /*has_border=*/false));
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (xenon::IsXenonSidebarEnabledForBrowser(browser_.get())) {
+    xenon_sidebar_view_ =
+        AddChildView(std::make_unique<xenon::XenonSidebarView>(browser_.get()));
+  }
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
+
   // Tabstrip comes basically last because it should be before toolbar in the
   // focus order but also needs to paint on top of everything.
   tab_strip_region_view_ =
@@ -1028,6 +1077,10 @@ BrowserView::~BrowserView() {
   // other cleanups that destroy views referenced in the layout manager.
   SetLayoutManager(nullptr);
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon_browser_window_mouse_event_handler_.reset();
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
+
   tab_search_bubble_host_.reset();
 
   // Destroy the top controls slide controller first as it depends on the
@@ -1071,6 +1124,7 @@ BrowserView::~BrowserView() {
   projects_panel_container_ = nullptr;
   toolbar_height_side_panel_ = nullptr;
   contents_height_side_panel_ = nullptr;
+  xenon_sidebar_view_ = nullptr;
   toolbar_button_provider_ = nullptr;
 
   // Child views maintain PrefMember attributes that point to
@@ -2348,6 +2402,30 @@ TabDragTarget* BrowserView::GetTabDragTarget(
   }
   return &multi_contents_view_->drop_target_controller();
 }
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+gfx::Rect BrowserView::GetXenonSidebarMouseOverBoundsInScreen() const {
+  gfx::Rect browser_bounds = GetBoundsInScreen();
+  const gfx::Rect top_container_bounds = top_container_->GetBoundsInScreen();
+  const int top = top_container_bounds.bottom();
+  return gfx::Rect(browser_bounds.x(), top, browser_bounds.width(),
+                   browser_bounds.bottom() - top);
+}
+
+void BrowserView::HandleXenonSidebarBrowserWindowMouseEvent(
+    const ui::MouseEvent& event) {
+  CHECK(event.type() == ui::EventType::kMouseMoved);
+  if (!xenon_sidebar_view_) {
+    return;
+  }
+
+  const gfx::PointF point_in_screen(
+      display::Screen::Get()->GetCursorScreenPoint());
+  static_cast<xenon::XenonSidebarView*>(xenon_sidebar_view_.get())
+      ->ShowSidebarOnMouseOver(point_in_screen,
+                               GetXenonSidebarMouseOverBoundsInScreen());
+}
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
 
 #if BUILDFLAG(IS_CHROMEOS)
 
@@ -5169,6 +5247,13 @@ void BrowserView::AddedToWidget() {
   SetThemeProfileForWindow(GetNativeWindow(), browser_->GetProfile());
 #endif
 
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  if (xenon_sidebar_view_) {
+    xenon_browser_window_mouse_event_handler_ =
+        std::make_unique<XenonBrowserWindowMouseEventHandler>(this);
+  }
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
+
   toolbar_->Init();
 
   UpdateTabSearchBubbleHost();
@@ -5253,6 +5338,7 @@ void BrowserView::AddedToWidget() {
   layout_views.multi_contents_view = multi_contents_view_;
   layout_views.toolbar_height_side_panel = toolbar_height_side_panel_;
   layout_views.contents_height_side_panel = contents_height_side_panel_;
+  layout_views.xenon_sidebar = xenon_sidebar_view_;
   layout_views.top_container_separator = top_container_separator_;
   // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)
 
@@ -5312,6 +5398,10 @@ void BrowserView::AddedToWidget() {
 }
 
 void BrowserView::RemovedFromWidget() {
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon_browser_window_mouse_event_handler_.reset();
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
+
   CHECK(GetFocusManager());
   focus_manager_observation_.Reset();
 }

@@ -671,6 +671,14 @@ static_library("ui") {
     deps += [ "//xenon_overlay/resources:resources_grit" ]
   }
 
+  if (enable_xenon_service) {
+    sources += [
+      "//xenon_overlay/chrome/browser/ui/views/sidebar/xenon_sidebar_view.cc",
+      "//xenon_overlay/chrome/browser/ui/views/sidebar/xenon_sidebar_view.h",
+    ]
+    deps += [ "//xenon_overlay/chrome/browser:sidebar" ]
+  }
+
   allow_circular_includes_from = []
 
   if (!is_android || is_desktop_android) {

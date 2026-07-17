@@ -246,6 +246,9 @@
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/browser/webid/federated_identity_api_permission_context_factory.h"
 #include "xenon_overlay/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+#include "xenon_overlay/chrome/browser/sidebar/xenon_sidebar_service_factory.h"
+#endif
 #if BUILDFLAG(ENABLE_XENON_SERVICE) && BUILDFLAG(ENABLE_XENON_AI)
 #include "xenon_overlay/chrome/browser/xenon_ai/browser_context_keyed_service_factories.h"
 #endif
@@ -621,6 +624,10 @@ void ChromeBrowserMainExtraPartsProfiles::
   // Module specific registration functions:
 #if BUILDFLAG(IS_CHROMEOS)
   ash::EnsureBrowserContextKeyedServiceFactoriesBuilt();
+#endif
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  xenon::XenonSidebarServiceFactory::GetInstance();
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)

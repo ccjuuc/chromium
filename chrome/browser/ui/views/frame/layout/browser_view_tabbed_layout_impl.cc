@@ -126,10 +126,15 @@ gfx::Size BrowserViewTabbedLayoutImpl::GetMinimumMainAreaSize() const {
               views().contents_height_side_panel->GetVisible()
           ? views().contents_height_side_panel->GetMinimumSize()
           : gfx::Size();
+  const gfx::Size xenon_sidebar_size =
+      views().xenon_sidebar && views().xenon_sidebar->GetVisible()
+          ? views().xenon_sidebar->GetMinimumSize()
+          : gfx::Size();
 
   const int width = std::max({toolbar_size.width(), bookmark_bar_size.width(),
                               infobar_container_size.width(),
                               contents_height_side_panel_size.width() +
+                                  xenon_sidebar_size.width() +
                                   kContentsContainerMinimumWidth});
   const int height = toolbar_size.height() + bookmark_bar_size.height() +
                      infobar_container_size.height() +
@@ -504,7 +509,11 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
   bool show_leading_separator = false;
   bool show_trailing_separator = false;
   bool contents_height_side_panel_leading = false;
-  int min_contents_width = kContentsContainerMinimumWidth;
+  const int xenon_sidebar_width =
+      IsParentedToAndVisible(views().xenon_sidebar, views().browser_view)
+          ? views().xenon_sidebar->GetPreferredSize().width()
+          : 0;
+  int min_contents_width = kContentsContainerMinimumWidth + xenon_sidebar_width;
 
   // The contents-height side panel is adjusted for the presence of a top
   // container separator in the browser view.
@@ -602,6 +611,58 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
                   gfx::Rect(content_left, params.visual_client_area.y(),
                             content_right - content_left,
                             params.visual_client_area.height()));
+
+  // Brave keeps its sidebar as an outer rail and shifts existing side panels
+  // inward. Mirror that shape here so Chromium's content area and side panel
+  // keep their own layout behavior and the Xenon rail never overlays web
+  // contents.
+  if (IsParentedTo(views().xenon_sidebar, views().browser_view)) {
+    auto contents_layout_iter =
+        layout.children.find(views().contents_container);
+    CHECK(contents_layout_iter != layout.children.end());
+    auto& contents_layout = contents_layout_iter->second;
+
+    const int actual_sidebar_width = std::min(
+        xenon_sidebar_width, std::max(0, contents_layout.bounds.width()));
+    if (actual_sidebar_width > 0) {
+      const bool xenon_sidebar_leading = contents_height_side_panel_leading;
+      const gfx::Rect sidebar_bounds(
+          xenon_sidebar_leading
+              ? browser_params.visual_client_area.x()
+              : browser_params.visual_client_area.right() -
+                    actual_sidebar_width,
+          contents_layout.bounds.y(), actual_sidebar_width,
+          contents_layout.bounds.height());
+
+      auto shift_same_side_panel_inward = [&](views::View* panel,
+                                              bool panel_is_leading) {
+        auto panel_layout_iter = layout.children.find(panel);
+        if (panel_layout_iter == layout.children.end() ||
+            panel_layout_iter->second.bounds.IsEmpty() ||
+            panel_is_leading != xenon_sidebar_leading) {
+          return;
+        }
+        panel_layout_iter->second.bounds.Offset(
+            xenon_sidebar_leading ? actual_sidebar_width
+                                  : -actual_sidebar_width,
+            0);
+      };
+      shift_same_side_panel_inward(views().toolbar_height_side_panel,
+                                   toolbar_height_side_panel_leading);
+      shift_same_side_panel_inward(views().contents_height_side_panel,
+                                   contents_height_side_panel_leading);
+
+      if (xenon_sidebar_leading) {
+        contents_layout.bounds.set_x(contents_layout.bounds.x() +
+                                     actual_sidebar_width);
+      }
+      contents_layout.bounds.set_width(
+          std::max(0, contents_layout.bounds.width() - actual_sidebar_width));
+      layout.AddChild(views().xenon_sidebar, sidebar_bounds);
+    } else {
+      layout.AddChild(views().xenon_sidebar, gfx::Rect(), false);
+    }
+  }
 
   // Make final visual adjustments required for child views to paint.
   if (tab_strip_type == TabStripType::kVertical) {

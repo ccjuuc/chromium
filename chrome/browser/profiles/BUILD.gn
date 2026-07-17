@@ -366,9 +366,13 @@ source_set("profiles_extra_parts_impl") {
     "//xenon_overlay/buildflags",
   ]
 
+  if (enable_xenon_service) {
+    deps += [ "//xenon_overlay/chrome/browser:sidebar" ]
+  }
+
   if (enable_xenon_ai) {
     deps += [
-      "//xenon_overlay/chrome/browser/xenon_ai:xenon_ai",
+      "//xenon_overlay/chrome/browser/xenon_ai",
       "//xenon_overlay/chrome/browser/xenon_ai:xenon_ai_context_menu",
     ]
   }

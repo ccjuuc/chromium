@@ -61,6 +61,7 @@
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/client_view.h"
+#include "xenon_overlay/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ui/compositor/compositor_metrics_tracker.h"
@@ -885,6 +886,9 @@ class BrowserView : public BrowserWindow,
   FRIEND_TEST_ALL_PREFIXES(PermissionChipUnitTest, AccessibleName);
 
   class AccessibilityModeObserver;
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  class XenonBrowserWindowMouseEventHandler;
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
 
   // Modes that require reparenting of views. For example, tab strip and web app
   // views must be reparented to top_container in certain modes. This state is
@@ -950,6 +954,11 @@ class BrowserView : public BrowserWindow,
 
   // Make sure the WebUI tab strip exists if it should.
   void MaybeInitializeWebUITabStrip();
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  gfx::Rect GetXenonSidebarMouseOverBoundsInScreen() const;
+  void HandleXenonSidebarBrowserWindowMouseEvent(const ui::MouseEvent& event);
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
 
   // Callback for the loading animation(s) associated with this view.
   void LoadingAnimationTimerCallback();
@@ -1184,6 +1193,8 @@ class BrowserView : public BrowserWindow,
   // |------------------------------------------------------------------------|
   // | ContentHeightSidePanel (contents_height_side_panel_)                   |
   // |------------------------------------------------------------------------|
+  // | XenonSidebarView (xenon_sidebar_view_)                                 |
+  // |------------------------------------------------------------------------|
   // | ToolbarHeightSidePanel (toolbar_height_side_panel_)                    |
   // |------------------------------------------------------------------------|
 
@@ -1308,6 +1319,14 @@ class BrowserView : public BrowserWindow,
   // Conceptually this member should exist if and only if the
   // side_panel_coordinator is created.
   raw_ptr<SidePanel> contents_height_side_panel_ = nullptr;
+
+  // Xenon shortcut rail for frequently used built-in pages.
+  raw_ptr<views::View> xenon_sidebar_view_ = nullptr;
+
+#if BUILDFLAG(ENABLE_XENON_SERVICE)
+  std::unique_ptr<XenonBrowserWindowMouseEventHandler>
+      xenon_browser_window_mouse_event_handler_;
+#endif  // BUILDFLAG(ENABLE_XENON_SERVICE)
 
   // Provides access to the toolbar buttons this browser view uses. Buttons may
   // appear in a hosted app frame or in a tabbed UI toolbar.

@@ -1,7 +1,7 @@
 import("//build/config/ui.gni")
+import("//testing/test.gni")
 import("//third_party/skia/modules/svg/svg.gni")
 import("//xenon_overlay/buildflags/features.gni")
-import("//testing/test.gni")
 
 source_set("xenon_prefs") {
   sources = [
@@ -12,6 +12,26 @@ source_set("xenon_prefs") {
     "//components/pref_registry",
     "//components/prefs",
   ]
+}
+
+if (enable_xenon_service) {
+  source_set("sidebar") {
+    sources = [
+      "sidebar/xenon_sidebar_service.cc",
+      "sidebar/xenon_sidebar_service.h",
+      "sidebar/xenon_sidebar_service_factory.cc",
+      "sidebar/xenon_sidebar_service_factory.h",
+    ]
+    deps = [
+      ":xenon_prefs",
+      "//base",
+      "//chrome/browser/profiles:profile",
+      "//components/keyed_service/content",
+      "//components/keyed_service/core",
+      "//components/prefs",
+      "//content/public/browser",
+    ]
+  }
 }
 
 source_set("xenon_common_bubble") {
@@ -61,12 +81,12 @@ source_set("napi") {
   sources = [
     "napi/js_native_api.h",
     "napi/js_native_api_types.h",
-    "napi/js_native_api_v8.h",
     "napi/js_native_api_v8.cc",
-    "napi/node_api.h",
-    "napi/napi_loader.h",
+    "napi/js_native_api_v8.h",
     "napi/napi_loader.cc",
+    "napi/napi_loader.h",
     "napi/napi_switches.h",
+    "napi/node_api.h",
   ]
   deps = [
     "//base",
@@ -96,12 +116,12 @@ source_set("browser") {
     "ui/webui/simple_webui_controller.h",
     "ui/webui/video_sniffer_webui_controller.cc",
     "ui/webui/video_sniffer_webui_controller.h",
+    "ui/webui/xenon_node_controller.cc",
+    "ui/webui/xenon_node_controller.h",
     "ui/webui/xenon_page_handler.cc",
     "ui/webui/xenon_page_handler.h",
     "ui/webui/xenon_ui_controller.cc",
     "ui/webui/xenon_ui_controller.h",
-    "ui/webui/xenon_node_controller.cc",
-    "ui/webui/xenon_node_controller.h",
     "ui/webui/xenon_webui_controller.cc",
     "ui/webui/xenon_webui_controller.h",
     "ui/webui/xenon_webui_dev_proxy.cc",
@@ -152,6 +172,7 @@ source_set("browser") {
   ]
 
   deps = [
+    ":napi",
     ":xenon_common_bubble",
     ":xenon_common_dialog",
     ":xenon_prefs",
@@ -168,6 +189,7 @@ source_set("browser") {
     "//content/public/browser",
     "//extensions/browser",
     "//extensions/common",
+    "//gin",
     "//mojo/public/cpp/bindings",
     "//net",
     "//services/network/public/cpp",
@@ -189,8 +211,6 @@ source_set("browser") {
     "//xenon_overlay/resources/webui:resources",
     "//xenon_overlay/resources/webui/xenon_node:resources",
     "//xenon_overlay/xenon/chrome/browser/ui/views:xenon_toast",
-    "//gin",
-    ":napi",
   ]
 
   if (enable_xenon_ai) {
@@ -205,7 +225,7 @@ source_set("browser") {
   }
 
   if (enable_xenon_service) {
-    deps += [ "//xenon_overlay/xenon/chrome/browser/fonts:fonts" ]
+    deps += [ "//xenon_overlay/xenon/chrome/browser/fonts" ]
     data_deps = [ "//xenon_overlay/xenon/chrome/browser/fonts:copy_fonts" ]
   }
 }
@@ -302,16 +322,16 @@ shared_library("test_addon") {
 test("napi_host_unittests") {
   testonly = true
   sources = [
-    "napi/napi_loader_unittest.cc",
     "napi/js_native_api_v8.cc",
     "napi/js_native_api_v8.h",
     "napi/napi_loader.cc",
     "napi/napi_loader.h",
+    "napi/napi_loader_unittest.cc",
   ]
   deps = [
     "//base",
-    "//base/test:test_support",
     "//base/test:run_all_unittests",
+    "//base/test:test_support",
     "//testing/gtest",
     "//v8",
     "//xenon_overlay/buildflags",
