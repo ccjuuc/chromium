@@ -29,6 +29,13 @@ class ComponentExtensionResourceManager {
       const base::FilePath& resource_path,
       int* resource_id) const = 0;
 
+  // Same lookup as IsComponentExtensionResource(), but only succeeds for
+  // resources whose extension package is kept in memory.
+  virtual bool IsMemoryComponentExtensionResource(
+      const base::FilePath& extension_path,
+      const base::FilePath& resource_path,
+      int* resource_id) const = 0;
+
   // Returns the i18n template replacements for a component extension if they
   // exist, or nullptr otherwise. If non-null, the returned value must remain
   // valid for the life of this ComponentExtensionResourceManager.

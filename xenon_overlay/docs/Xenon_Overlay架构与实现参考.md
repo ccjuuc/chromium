@@ -334,15 +334,18 @@ sequenceDiagram
 
 ## 6. 内置扩展（Component Extension）
 
-Xenon 内置扩展走的是 Chromium **组件扩展**管线：由 Browser 进程在 **Profile 就绪后** 调用 `extensions::ComponentLoader::Add`，把 **磁盘上的扩展目录**（manifest + JS/CSS/HTML）注册进 **`ExtensionRegistry`**。它与 **§4 `XenonMainService`（Utility）**、**页面内 `window.xenon`（Renderer Mojo）** 仍是 **不同通道**；此外本分支在 Chromium 中注册了 **embedder 私有扩展 API `chrome.xenonPrivate`**（步骤见 **§6.6–6.7**），供组件扩展在 **Browser 进程**执行自定义逻辑。
+Xenon 内置扩展走的是 Chromium **组件扩展**管线：由 Browser 进程在 **Profile 就绪后** 调用 `extensions::ComponentLoader::Add`，把扩展注册进 **`ExtensionRegistry`**。生产默认从加密 ZIP 解密到内存；目录模式保留给开发构建。它与 **§4 `XenonMainService`（Utility）**、**页面内 `window.xenon`（Renderer Mojo）** 仍是 **不同通道**；此外本分支在 Chromium 中注册了 **embedder 私有扩展 API `chrome.xenonPrivate`**（步骤见 **§6.6–6.7**），供组件扩展在 **Browser 进程**执行自定义逻辑。
 
 ### 6.1 资源与产物路径
 
-| 源码 | 运行时（相对 `DIR_MODULE`） |
-|------|------------------------------|
-| `xenon_overlay/resources/extension/manifest.json` 等 | `resources/xenon_extension/`（由 `xenon_overlay/resources/BUILD.gn` 的 `copy_extension` / macOS `bundle_data` 拷贝） |
+| `xenon_extension_source` | 源码 | 运行时（相对 `DIR_MODULE`） |
+|------|------|------------------------------|
+| `"zip"`（默认） | `xenon_overlay/resources/xenon_extension.zip` | `resources/xenon_extension.zip` |
+| `"directory"` | `xenon_overlay/resources/extension/*` | `resources/xenon_extension/*` |
 
-默认配置里 **`builtin_path`** 为 `"resources/xenon_extension"`（见 `xenon_extension_manager.cc` 内 `CreateXenonConfig()`）。扩展为 **Manifest V3**：`background.service_worker`、`action.default_popup` 指向 `index.html` + `background.js`。
+`xenon_overlay/resources/BUILD.gn` 根据该 GN 参数选择 `copy` / macOS `bundle_data` 的输入，目录模式不依赖 out 目录中的历史残留文件。扩展为 **Manifest V3**：`background.service_worker`、`action.default_popup` 指向 `index.html` + `background.js`。
+
+ZIP 模式由 `ThreadPool + MayBlock` 完成文件读取、SHA-256、解密、manifest/ID/版本校验和版本选择；UI 线程只分配资源 ID、构造 `DataPack`、注册 `ResourceBundle` 并调用 `ComponentLoader::Add`。这里没有调用 `UnzipService`：现有 service API 的输出是目录，不适合“不落盘”的内存资源加载。
 
 ### 6.2 核心类与职责
 
@@ -350,7 +353,8 @@ Xenon 内置扩展走的是 Chromium **组件扩展**管线：由 Browser 进程
 |----|------|------|
 | **`XenonExtensionManager`** | `xenon_extension_manager.{h,cc}` | **单例**；构造时 `RegisterExtension("Xenon Overlay Extension", CreateXenonConfig())`；对外封装 `LoadExtension*`、`FindExtension`、`ShowExtension`、`CheckForUpdates` |
 | **`ComponentExtensionManager`** | 同上 | **可多扩展**：`RegisterExtension` 维护 `configs_`；路径解析、加载、更新逻辑 |
-| **`ComponentExtensionConfig` / Builder** | 同上 | `extension_name`、`expected_extension_id`（预留校验）、`builtin_path`、`additional_builtin_paths`、`user_data_subdir`、`update_check_url` |
+| **`ComponentExtensionConfig` / Builder** | 同上 | `extension_name`、`expected_extension_id`、目录/加密 ZIP 路径、ZIP 密码、内存虚拟根路径、`user_data_subdir`、`update_check_url` |
+| **`xenon_encrypted_extension_package`** | `xenon_encrypted_extension_package.{h,cc}` | 工作线程上的包读取、哈希、签名、ID/版本校验、内置包与用户更新选择 |
 
 加载时 **`AddExtensionWithManifest`**：`extensions::ComponentLoader::Get(profile)->Add(std::move(manifest), path)`，与 Chrome 内置 PDF、翻译类组件扩展同一套机制。
 
@@ -358,16 +362,36 @@ Xenon 内置扩展走的是 Chromium **组件扩展**管线：由 Browser 进程
 
 **文件**：`xenon_browser_main_extra_parts.cc`
 
-- **默认**（无 `--show-xenon-extension`）：`XenonExtensionManager::LoadExtensionFromDefaultPath(profile, callback)` → 异步在 **ThreadPool** 上 `DetermineBestExtensionPath`（内置路径 **vs** `Profile` 下 `user_data_subdir` 中的更新包，取 **较高 version**）→ UI 线程 **`ComponentLoader::Add`**。
+- **默认**（无 `--show-xenon-extension`）：`XenonExtensionManager::LoadExtensionFromDefaultPath(profile, callback)` → **ThreadPool** 校验并选择候选包 → UI 线程 **`ComponentLoader::Add`**。加密 ZIP 更新必须同时通过签名、SHA-256、`expected_extension_id` 和实际 manifest 版本校验，并且版本严格高于内置包；否则回退内置包。
 - **`--show-xenon-extension`**：**不**走上述加载分支，改为 **`XenonWebDialog::ShowXenonOverlay`**（WebUI 浮层，见 **§7** 相关说明）。
 
-**`ShowExtension`**（管理器 API）：在 **Registry** 里按 **`Extension::name()`** 匹配配置里的 `extension_name`，若找到则：
+**`ShowExtension`**（管理器 API）：优先在 **Registry** 里按配置的 `expected_extension_id` 查找，未配置 ID 时才按 `Extension::name()` 匹配；若找到则：
 
 ```text
 XenonWebDialog::Show(context, extension->GetResourceURL("index.html"), width, height, title)
 ```
 
-并在配置了 **`update_check_url`** 时触发 **`CheckForUpdates`**（`SimpleURLLoader` 拉更新 JSON → 下载 zip → `UnzipService` 解压到用户目录，下次启动路径优选新版本）。
+并在配置了 **`update_check_url`** 时触发 **`CheckForUpdates`**。更新 JSON 格式为：
+
+```json
+{
+  "version": "1.1",
+  "url": "https://updates.example.test/xenon_extension.zip",
+  "sha256": "<64 位小写十六进制>",
+  "signature": "<Base64 RSA-PKCS1-SHA256 签名>"
+}
+```
+
+签名公钥取自当前可信扩展 manifest 的 `"key"`；签名私钥必须由发布端保管。签名输入使用 UTF-8、无 BOM、末尾无换行，内容固定为：
+
+```text
+xenon-encrypted-extension-update-v1
+<version>
+<GURL 规范化后的 url>
+<sha256>
+```
+
+下载完成后先校验整包 SHA-256，哈希不匹配的网络内容不会进入 ZIP 解析器。加密模式随后在工作线程验证包内 manifest 并以 `extension-<sha256>.zip` 落盘，最后原子写入 `update.json`；每次启动都会重新验证签名和包哈希。内存缓存以包 SHA-256 为键，不再以固定文件路径为键。
 
 ### 6.4 扩展 JS 与「Browser」交互的现状
 

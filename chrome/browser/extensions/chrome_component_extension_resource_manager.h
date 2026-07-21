@@ -5,8 +5,10 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_CHROME_COMPONENT_EXTENSION_RESOURCE_MANAGER_H_
 #define CHROME_BROWSER_EXTENSIONS_CHROME_COMPONENT_EXTENSION_RESOURCE_MANAGER_H_
 
+#include <map>
 #include <memory>
 
+#include "base/files/file_path.h"
 #include "extensions/browser/component_extension_resource_manager.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
@@ -27,10 +29,19 @@ class ChromeComponentExtensionResourceManager
 
   ~ChromeComponentExtensionResourceManager() override;
 
+  static void RegisterMemoryExtensionResources(
+      const base::FilePath& extension_root,
+      std::map<base::FilePath, int> path_to_resource_id);
+
   // Overridden from ComponentExtensionResourceManager:
   bool IsComponentExtensionResource(const base::FilePath& extension_path,
                                     const base::FilePath& resource_path,
                                     int* resource_id) const override;
+
+  bool IsMemoryComponentExtensionResource(
+      const base::FilePath& extension_path,
+      const base::FilePath& resource_path,
+      int* resource_id) const override;
   const ui::TemplateReplacements* GetTemplateReplacementsForExtension(
       const ExtensionId& extension_id) const override;
 

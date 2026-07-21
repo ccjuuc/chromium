@@ -155,6 +155,8 @@ source_set("browser") {
     "xenon_browser_main_extra_parts.h",
     "xenon_data_mask_to_main_host_impl.cc",
     "xenon_data_mask_to_main_host_impl.h",
+    "xenon_encrypted_extension_package.cc",
+    "xenon_encrypted_extension_package.h",
     "xenon_extension_manager.cc",
     "xenon_extension_manager.h",
     "xenon_frame_interface_binder.cc",
@@ -179,14 +181,17 @@ source_set("browser") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/background/extensions",
+    "//chrome/browser/extensions",
     "//chrome/browser/lifetime:termination_notification",
     "//chrome/browser/ui",
     "//chrome/browser/ui/startup",
     "//chrome/browser/ui/startup:xenon_login_startup_hooks",
+    "//components/crx_file",
     "//components/keep_alive_registry",
     "//components/services/unzip/content",
     "//components/services/unzip/public/cpp",
     "//content/public/browser",
+    "//crypto",
     "//extensions/browser",
     "//extensions/common",
     "//gin",
@@ -196,6 +201,7 @@ source_set("browser") {
     "//services/network/public/mojom",
     "//skia",
     "//third_party/expat",
+    "//third_party/zlib/google:zip",
     "//ui/base",
     "//ui/compositor",
     "//ui/compositor_extra",
@@ -340,4 +346,25 @@ test("napi_host_unittests") {
     deps += [ "//xenon_overlay/third_party:libuv" ]
   }
   data_deps = [ ":test_addon" ]
+}
+
+test("xenon_extension_package_unittests") {
+  testonly = true
+  sources = [
+    "xenon_encrypted_extension_package.cc",
+    "xenon_encrypted_extension_package.h",
+    "xenon_encrypted_extension_package_unittest.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//components/crx_file",
+    "//crypto",
+    "//extensions/common",
+    "//testing/gtest",
+    "//third_party/zlib/google:zip",
+    "//url",
+  ]
+  data = [ "//xenon_overlay/resources/xenon_extension.zip" ]
 }

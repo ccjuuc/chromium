@@ -18,10 +18,17 @@ declare_args() {
 
   # Utility→Browser XenonBrowserObserver + SetBrowserObserver registration.
   enable_xenon_browser_observer = true
+
+  # Component extension source packaged into Xenon: "zip" for production, or
+  # "directory" for plaintext development builds.
+  xenon_extension_source = "zip"
 }
 
 # Second block: defaults may reference args from the block above (GN forbids same-block refs).
 declare_args() {
+  assert(
+      xenon_extension_source == "zip" || xenon_extension_source == "directory")
+
   # Xenon AI: Profile KeyedService + chrome://xenon-ai-side-panel WebUI + Side Panel entry.
   enable_xenon_ai = enable_xenon_service
 

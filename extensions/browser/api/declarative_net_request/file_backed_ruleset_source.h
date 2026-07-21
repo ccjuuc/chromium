@@ -7,9 +7,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "base/time/time.h"
@@ -37,6 +39,7 @@ struct Rule;
 namespace declarative_net_request {
 class ParseInfo;
 class RulesetMatcher;
+struct MemoryRulesetData;
 
 struct IndexAndPersistJSONRulesetResult {
  public:
@@ -228,9 +231,13 @@ class FileBackedRulesetSource : public RulesetSource {
       int expected_ruleset_checksum,
       std::unique_ptr<RulesetMatcher>* matcher) const;
 
+  bool is_memory_backed() const { return !!memory_ruleset_data_; }
+  void SetMemoryIndexedRuleset(base::span<const uint8_t> data) const;
+
  private:
   FileBackedRulesetSource(base::FilePath json_path,
                           base::FilePath indexed_path,
+                          std::optional<std::string> bundled_json,
                           RulesetID id,
                           size_t rule_count_limit,
                           ExtensionId extension_id,
@@ -238,6 +245,8 @@ class FileBackedRulesetSource : public RulesetSource {
 
   base::FilePath json_path_;
   base::FilePath indexed_path_;
+  std::optional<std::string> bundled_json_;
+  std::shared_ptr<MemoryRulesetData> memory_ruleset_data_;
 };
 
 }  // namespace declarative_net_request

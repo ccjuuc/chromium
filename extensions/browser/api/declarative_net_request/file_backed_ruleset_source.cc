@@ -4,6 +4,7 @@
 
 #include "extensions/browser/api/declarative_net_request/file_backed_ruleset_source.h"
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -19,18 +20,22 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ptr_util.h"
+#include "base/no_destructor.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/lock.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/values.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
 #include "extensions/browser/api/declarative_net_request/parse_info.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
+#include "extensions/browser/component_extension_resource_manager.h"
+#include "extensions/browser/extensions_browser_client.h"
 #include "extensions/common/api/declarative_net_request.h"
 #include "extensions/common/api/declarative_net_request/dnr_manifest_data.h"
 #include "extensions/common/error_utils.h"
@@ -38,8 +43,14 @@
 #include "extensions/common/install_warning.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "tools/json_schema_compiler/util.h"
+#include "ui/base/resource/resource_bundle.h"
 
 namespace extensions::declarative_net_request {
+
+struct MemoryRulesetData {
+  base::Lock lock;
+  std::optional<std::string> indexed_ruleset GUARDED_BY(lock);
+};
 
 namespace {
 
@@ -52,6 +63,20 @@ constexpr const char kFileReadError[] = "File read error.";
 constexpr const char kDynamicRulesetDirectory[] = "DNR Extension Rules";
 constexpr const char kDynamicRulesJSONFilename[] = "rules.json";
 constexpr const char kDynamicIndexedRulesFilename[] = "rules.fbs";
+
+std::shared_ptr<MemoryRulesetData> GetMemoryRulesetData(
+    const base::FilePath& indexed_path) {
+  static base::NoDestructor<
+      std::map<base::FilePath, std::shared_ptr<MemoryRulesetData>>>
+      rulesets;
+  static base::NoDestructor<base::Lock> lock;
+  base::AutoLock auto_lock(*lock);
+  auto& data = (*rulesets)[indexed_path];
+  if (!data) {
+    data = std::make_shared<MemoryRulesetData>();
+  }
+  return data;
+}
 
 // Helper to retrieve the filename for the given |file_path|.
 std::string GetFilename(const base::FilePath& file_path) {
@@ -176,7 +201,9 @@ IndexAndPersistJSONRulesetResult IndexAndPersistRuleset(
         GetErrorWithFilename(source.json_path(), info.error()));
   }
 
-  if (!PersistIndexedRuleset(source.indexed_path(), info.GetBuffer())) {
+  if (source.is_memory_backed()) {
+    source.SetMemoryIndexedRuleset(info.GetBuffer());
+  } else if (!PersistIndexedRuleset(source.indexed_path(), info.GetBuffer())) {
     return IndexAndPersistJSONRulesetResult::CreateErrorResult(
         GetErrorWithFilename(source.json_path(), kErrorPersisting));
   }
@@ -313,11 +340,23 @@ std::vector<FileBackedRulesetSource> FileBackedRulesetSource::CreateStatic(
 FileBackedRulesetSource FileBackedRulesetSource::CreateStatic(
     const Extension& extension,
     const DNRManifestData::RulesetInfo& info) {
+  std::optional<std::string> bundled_json;
+  const ComponentExtensionResourceManager* resource_manager =
+      ExtensionsBrowserClient::Get()->GetComponentExtensionResourceManager();
+  int resource_id = 0;
+  if (resource_manager &&
+      resource_manager->IsMemoryComponentExtensionResource(
+          extension.path(), info.relative_path, &resource_id)) {
+    bundled_json =
+        ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+            resource_id);
+  }
   return FileBackedRulesetSource(
       extension.path().Append(info.relative_path),
       extension.path().Append(
           file_util::GetIndexedRulesetRelativePath(info.id.value())),
-      info.id, GetMaximumRulesPerRuleset(), extension.id(), info.enabled);
+      std::move(bundled_json), info.id, GetMaximumRulesPerRuleset(),
+      extension.id(), info.enabled);
 }
 
 // static
@@ -331,7 +370,7 @@ FileBackedRulesetSource FileBackedRulesetSource::CreateDynamic(
   return FileBackedRulesetSource(
       dynamic_ruleset_directory.AppendASCII(kDynamicRulesJSONFilename),
       dynamic_ruleset_directory.AppendASCII(kDynamicIndexedRulesFilename),
-      kDynamicRulesetID, GetDynamicRuleLimit(), extension_id,
+      std::nullopt, kDynamicRulesetID, GetDynamicRuleLimit(), extension_id,
       true /* enabled_by_default */);
 }
 
@@ -349,8 +388,8 @@ FileBackedRulesetSource::CreateTemporarySource(RulesetID id,
 
   // Use WrapUnique since FileBackedRulesetSource constructor is private.
   return base::WrapUnique(new FileBackedRulesetSource(
-      std::move(temporary_file_json), std::move(temporary_file_indexed), id,
-      rule_count_limit, std::move(extension_id),
+      std::move(temporary_file_json), std::move(temporary_file_indexed),
+      std::nullopt, id, rule_count_limit, std::move(extension_id),
       true /* enabled_by_default */));
 }
 
@@ -361,9 +400,11 @@ FileBackedRulesetSource& FileBackedRulesetSource::operator=(
     FileBackedRulesetSource&&) = default;
 
 FileBackedRulesetSource FileBackedRulesetSource::Clone() const {
-  return FileBackedRulesetSource(json_path_, indexed_path_, id(),
-                                 rule_count_limit(), extension_id(),
-                                 enabled_by_default());
+  FileBackedRulesetSource clone(json_path_, indexed_path_, bundled_json_, id(),
+                                rule_count_limit(), extension_id(),
+                                enabled_by_default());
+  clone.memory_ruleset_data_ = memory_ruleset_data_;
+  return clone;
 }
 
 IndexAndPersistJSONRulesetResult
@@ -378,14 +419,14 @@ void FileBackedRulesetSource::IndexAndPersistJSONRuleset(
     data_decoder::DataDecoder* decoder,
     uint8_t parse_flags,
     IndexAndPersistJSONRulesetCallback callback) const {
-  if (!base::PathExists(json_path_)) {
+  if (!bundled_json_ && !base::PathExists(json_path_)) {
     std::move(callback).Run(IndexAndPersistJSONRulesetResult::CreateErrorResult(
         GetErrorWithFilename(json_path_, kFileDoesNotExistError)));
     return;
   }
 
-  std::string json_contents;
-  if (!base::ReadFileToString(json_path_, &json_contents)) {
+  std::string json_contents = bundled_json_.value_or(std::string());
+  if (!bundled_json_ && !base::ReadFileToString(json_path_, &json_contents)) {
     std::move(callback).Run(IndexAndPersistJSONRulesetResult::CreateErrorResult(
         GetErrorWithFilename(json_path_, kFileReadError)));
     return;
@@ -399,13 +440,13 @@ void FileBackedRulesetSource::IndexAndPersistJSONRuleset(
 ReadJSONRulesResult FileBackedRulesetSource::ReadJSONRulesUnsafe() const {
   ReadJSONRulesResult result;
 
-  if (!base::PathExists(json_path_)) {
+  if (!bundled_json_ && !base::PathExists(json_path_)) {
     return ReadJSONRulesResult::CreateErrorResult(Status::kFileDoesNotExist,
                                                   kFileDoesNotExistError);
   }
 
-  std::string json_contents;
-  if (!base::ReadFileToString(json_path_, &json_contents)) {
+  std::string json_contents = bundled_json_.value_or(std::string());
+  if (!bundled_json_ && !base::ReadFileToString(json_path_, &json_contents)) {
     return ReadJSONRulesResult::CreateErrorResult(Status::kFileReadError,
                                                   kFileReadError);
   }
@@ -444,6 +485,23 @@ LoadRulesetResult FileBackedRulesetSource::CreateVerifiedMatcher(
 
   base::ElapsedTimer timer;
 
+  if (memory_ruleset_data_) {
+    std::string ruleset_data;
+    {
+      base::AutoLock auto_lock(memory_ruleset_data_->lock);
+      if (!memory_ruleset_data_->indexed_ruleset) {
+        return LoadRulesetResult::kErrorInvalidPath;
+      }
+      ruleset_data = *memory_ruleset_data_->indexed_ruleset;
+    }
+    if (expected_ruleset_checksum !=
+        GetChecksum(base::as_byte_span(ruleset_data))) {
+      return LoadRulesetResult::kErrorChecksumMismatch;
+    }
+    return RulesetSource::CreateVerifiedMatcher(std::move(ruleset_data),
+                                                matcher);
+  }
+
   if (!base::PathExists(indexed_path())) {
     return LoadRulesetResult::kErrorInvalidPath;
   }
@@ -472,8 +530,17 @@ LoadRulesetResult FileBackedRulesetSource::CreateVerifiedMatcher(
   return result;
 }
 
+void FileBackedRulesetSource::SetMemoryIndexedRuleset(
+    base::span<const uint8_t> data) const {
+  DCHECK(memory_ruleset_data_);
+  base::AutoLock auto_lock(memory_ruleset_data_->lock);
+  memory_ruleset_data_->indexed_ruleset =
+      std::string(reinterpret_cast<const char*>(data.data()), data.size());
+}
+
 FileBackedRulesetSource::FileBackedRulesetSource(base::FilePath json_path,
                                                  base::FilePath indexed_path,
+                                                 std::optional<std::string> bundled_json,
                                                  RulesetID id,
                                                  size_t rule_count_limit,
                                                  ExtensionId extension_id,
@@ -483,6 +550,11 @@ FileBackedRulesetSource::FileBackedRulesetSource(base::FilePath json_path,
                     std::move(extension_id),
                     enabled_by_default),
       json_path_(std::move(json_path)),
-      indexed_path_(std::move(indexed_path)) {}
+      indexed_path_(std::move(indexed_path)),
+      bundled_json_(std::move(bundled_json)) {
+  if (bundled_json_) {
+    memory_ruleset_data_ = GetMemoryRulesetData(indexed_path_);
+  }
+}
 
 }  // namespace extensions::declarative_net_request

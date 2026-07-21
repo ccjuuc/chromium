@@ -291,6 +291,19 @@ base::FilePath GetBundleResourcePath(
     const base::FilePath& extension_resources_path,
     int* resource_id) {
   *resource_id = 0;
+  const base::FilePath request_relative_path =
+      extensions::file_util::ExtensionURLToRelativeFilePath(request.url);
+  auto* manager =
+      ExtensionsBrowserClient::Get()->GetComponentExtensionResourceManager();
+  CHECK(manager);
+
+  // Memory-backed component extensions need not live below DIR_RESOURCES.
+  if (manager->IsComponentExtensionResource(
+          extension_resources_path, request_relative_path, resource_id)) {
+    DCHECK_NE(0, *resource_id);
+    return request_relative_path;
+  }
+
   // |chrome_resources_path| corresponds to src/chrome/browser/resources in
   // source tree.
   base::FilePath chrome_resources_path;
@@ -304,18 +317,7 @@ base::FilePath GetBundleResourcePath(
   if (!chrome_resources_path.IsParent(extension_resources_path))
     return base::FilePath();
 
-  const base::FilePath request_relative_path =
-      extensions::file_util::ExtensionURLToRelativeFilePath(request.url);
-  auto* manager =
-      ExtensionsBrowserClient::Get()->GetComponentExtensionResourceManager();
-  CHECK(manager);
-  if (!manager->IsComponentExtensionResource(
-          extension_resources_path, request_relative_path, resource_id)) {
-    return base::FilePath();
-  }
-  DCHECK_NE(0, *resource_id);
-
-  return request_relative_path;
+  return base::FilePath();
 }
 
 void LoadResourceFromResourceBundle(

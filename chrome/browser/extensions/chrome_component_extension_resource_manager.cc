@@ -6,11 +6,13 @@
 
 #include <map>
 #include <string>
+#include <utility>
 
 #include "base/check.h"
 #include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -46,6 +48,18 @@
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
+
+namespace {
+
+using MemoryExtensionResourceMap =
+    std::map<base::FilePath, std::map<base::FilePath, int>>;
+
+MemoryExtensionResourceMap& GetMemoryExtensionResourceMap() {
+  static base::NoDestructor<MemoryExtensionResourceMap> resources;
+  return *resources;
+}
+
+}  // namespace
 
 class ChromeComponentExtensionResourceManager::Data {
  public:
@@ -164,11 +178,32 @@ ChromeComponentExtensionResourceManager::
 ChromeComponentExtensionResourceManager::
     ~ChromeComponentExtensionResourceManager() = default;
 
+// static
+void ChromeComponentExtensionResourceManager::RegisterMemoryExtensionResources(
+    const base::FilePath& extension_root,
+    std::map<base::FilePath, int> path_to_resource_id) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  GetMemoryExtensionResourceMap()[extension_root.NormalizePathSeparators()] =
+      std::move(path_to_resource_id);
+}
+
 bool ChromeComponentExtensionResourceManager::IsComponentExtensionResource(
     const base::FilePath& extension_path,
     const base::FilePath& resource_path,
     int* resource_id) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  auto extension_entry = GetMemoryExtensionResourceMap().find(
+      extension_path.NormalizePathSeparators());
+  if (extension_entry != GetMemoryExtensionResourceMap().end()) {
+    auto resource_entry = extension_entry->second.find(
+        resource_path.NormalizePathSeparators());
+    if (resource_entry == extension_entry->second.end()) {
+      return false;
+    }
+    *resource_id = resource_entry->second;
+    return true;
+  }
 
   base::FilePath directory_path = extension_path;
   base::FilePath resources_dir;
@@ -186,6 +221,25 @@ bool ChromeComponentExtensionResourceManager::IsComponentExtensionResource(
     return false;
 
   *resource_id = entry->second;
+  return true;
+}
+
+bool ChromeComponentExtensionResourceManager::
+    IsMemoryComponentExtensionResource(const base::FilePath& extension_path,
+                                       const base::FilePath& resource_path,
+                                       int* resource_id) const {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  auto extension_entry = GetMemoryExtensionResourceMap().find(
+      extension_path.NormalizePathSeparators());
+  if (extension_entry == GetMemoryExtensionResourceMap().end()) {
+    return false;
+  }
+  auto resource_entry = extension_entry->second.find(
+      resource_path.NormalizePathSeparators());
+  if (resource_entry == extension_entry->second.end()) {
+    return false;
+  }
+  *resource_id = resource_entry->second;
   return true;
 }
 
