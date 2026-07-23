@@ -1,5 +1,9 @@
 #include "xenon_overlay/chrome/browser/xenon_manager.h"
 
+#include <string>
+#include <vector>
+
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "build/buildflag.h"
@@ -7,6 +11,8 @@
 #include "content/public/browser/service_process_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+#include "xenon_overlay/chrome/browser/napi/napi_switches.h"
 
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
 #include "content/public/browser/browser_thread.h"
@@ -21,6 +27,22 @@ scoped_refptr<base::SequencedTaskRunner> GetUiTaskRunner() {
   return content::GetUIThreadTaskRunner({});
 }
 #endif
+
+std::vector<std::string> GetXenonServiceExtraSwitches() {
+  std::vector<std::string> switches;
+  const base::CommandLine* command_line =
+      base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(napi_switches::kAllowExternalNodeAddons)) {
+    switches.push_back(napi_switches::kAllowExternalNodeAddons);
+  }
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  if (command_line->HasSwitch(
+          napi_switches::kDisableNodeStaticRegistration)) {
+    switches.push_back(napi_switches::kDisableNodeStaticRegistration);
+  }
+#endif
+  return switches;
+}
 
 }  // namespace
 
@@ -41,7 +63,9 @@ void XenonManager::EnsureServiceStarted(content::BrowserContext* context) {
       content::ServiceProcessHost::Launch<mojom::XenonMainService>(
           content::ServiceProcessHost::Options()
               .WithDisplayName("Xenon Overlay Service")
+              .WithExtraCommandLineSwitches(GetXenonServiceExtraSwitches())
               .Pass());
+  ++service_generation_;
 
 #if BUILDFLAG(ENABLE_XENON_MANAGER_SHARED_REMOTE)
   mojo::PendingRemote<mojom::XenonMainService> pending = launched.Unbind();
@@ -164,5 +188,23 @@ void XenonManager::Ping(PingCallback callback) {
   }
   service_remote_->Ping(std::move(callback));
 }
+
+void XenonManager::RegisterNodeObserver(XenonNodeObserver* observer) {
+  node_observer_ = observer;
+}
+
+void XenonManager::UnregisterNodeObserver(XenonNodeObserver* observer) {
+  if (node_observer_ == observer) {
+    node_observer_ = nullptr;
+  }
+}
+
+#if BUILDFLAG(ENABLE_XENON_BROWSER_OBSERVER)
+void XenonManager::OnThreadCallback(const std::string& message) {
+  if (node_observer_) {
+    node_observer_->OnThreadCallback(message);
+  }
+}
+#endif
 
 }  // namespace xenon

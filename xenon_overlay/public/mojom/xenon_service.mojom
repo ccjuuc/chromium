@@ -1,7 +1,8 @@
 module xenon.mojom;
 
-import "services/network/public/mojom/url_loader_factory.mojom";
+import "mojo/public/mojom/base/values.mojom";
 import "sandbox/policy/mojom/sandbox.mojom";
+import "services/network/public/mojom/url_loader_factory.mojom";
 
 // Multiplexed on the same message pipe as XenonMainService (FIFO ordering).
 interface XenonAssociatedSide {
@@ -11,20 +12,141 @@ interface XenonAssociatedSide {
 // Implemented in the browser process; utility holds a Remote to push events.
 interface XenonBrowserObserver {
   OnServiceEvent(string message);
+
+  OnThreadCallback(string message);
 };
 
-[ServiceSandbox=sandbox.mojom.Sandbox.kUtility]
+// Receives callbacks retained and invoked by a loaded Node addon.
+interface NodeAddonObserver {
+  OnCallback(int32 callback_id, array<mojo_base.mojom.Value> args);
+
+  OnCallbackReleased(int32 callback_id);
+};
+
+struct NodeInvokeArg {
+  bool is_callback;
+  int32 callback_id;
+  mojo_base.mojom.Value value;
+};
+
+struct NodeCallbackResult {
+  int32 callback_id;
+  mojo_base.mojom.Value value;
+};
+
+// Property metadata for a value exposed by a Node addon.
+struct NodeExportInfo {
+  string name;
+  // "undefined", "null", "boolean", "number", "string", "bigint",
+  // "symbol", "function", "object", "class", or "property".
+  string kind;
+  bool enumerable;
+  bool writable;
+  bool has_value;
+  mojo_base.mojom.Value value;
+  // Own members, including static members for functions and classes.
+  array<NodeExportInfo> children;
+  // Members inherited from a custom prototype. For classes, these are
+  // instance members from Constructor.prototype.
+  array<NodeExportInfo> prototype;
+};
+
+struct NodeInvokeCall {
+  string function_name;
+  array<NodeInvokeArg> args;
+};
+
+struct NodeInvokeCallResult {
+  bool success;
+  mojo_base.mojom.Value result;
+  array<NodeCallbackResult> callback_results;
+  string error_msg;
+};
+
+[ServiceSandbox=sandbox.mojom.Sandbox.kNoSandbox]
 interface XenonMainService {
   // Initialize the service with a URLLoaderFactory to enable network requests.
-  Initialize(pending_remote<network.mojom.URLLoaderFactory> url_loader_factory);
+  Initialize(
+      pending_remote<network.mojom.URLLoaderFactory> url_loader_factory);
 
   // Simple ping method for testing
   Ping() => (string response);
 
   // Binds an associated interface on this service's primary pipe (browser uses
   // AssociatedRemote + BindNewEndpointAndPassReceiver).
-  BindAssociatedSide(pending_associated_receiver<XenonAssociatedSide> receiver);
+  BindAssociatedSide(
+      pending_associated_receiver<XenonAssociatedSide> receiver);
 
-  // Browser passes its observer; utility calls OnServiceEvent for async notifications.
+  // Browser passes its observer; utility calls OnServiceEvent for async
+  // notifications.
   SetBrowserObserver(pending_remote<XenonBrowserObserver> observer);
+
+  // One observer per chrome://xenon-node page. Native callback ids are scoped
+  // by client_id so multiple pages cannot consume each other's callbacks.
+  SetNodeAddonObserver(
+      int32 client_id, pending_remote<NodeAddonObserver> observer);
+
+  // N-API / Node Addon testing methods (runs in the utility process)
+  LoadAddon(string path)
+      => (bool success, string error_msg, array<NodeExportInfo> exports);
+
+  // Expand one export path (e.g. "NativeAplayerStack") one level deeper.
+  // For napi_define_class exports, children come from Constructor.prototype
+  // (inspection only; invoke uses ConstructExport + InvokeInstance).
+  InspectExport(string module_path, string export_path)
+      => (bool success, string error_msg, NodeExportInfo? info);
+
+  // `new Constructor(...args)` in the Utility isolate; returns an instance id.
+  ConstructExport(int32 client_id,
+                  string module_path,
+                  string export_path,
+                  array<NodeInvokeArg> args)
+      => (bool success, int32 instance_id, string error_msg);
+
+  // Call an instance method with `this` = the constructed object (V8 walks
+  // the prototype chain for the method lookup).
+  InvokeInstance(int32 client_id,
+                 string module_path,
+                 int32 instance_id,
+                 string method_name,
+                 array<NodeInvokeArg> args)
+      => (bool success,
+          mojo_base.mojom.Value result,
+          array<NodeCallbackResult> callback_results,
+          string error_msg);
+
+  GetInstanceProperty(
+      string module_path, int32 instance_id, string property_name)
+      => (bool success, mojo_base.mojom.Value result, string error_msg);
+
+  SetInstanceProperty(string module_path,
+                      int32 instance_id,
+                      string property_name,
+                      mojo_base.mojom.Value value)
+      => (bool success, string error_msg);
+
+  ReleaseInstance(string module_path, int32 instance_id);
+
+  InvokeFunction(int32 client_id,
+                 string module_path,
+                 string function_name,
+                 array<NodeInvokeArg> args)
+      => (bool success,
+          mojo_base.mojom.Value result,
+          array<NodeCallbackResult> callback_results,
+          string error_msg);
+
+  GetExportProperty(
+      string module_path, string object_path, string property_name)
+      => (bool success, mojo_base.mojom.Value result, string error_msg);
+
+  SetExportProperty(string module_path,
+                    string object_path,
+                    string property_name,
+                    mojo_base.mojom.Value value)
+      => (bool success, string error_msg);
+
+  // Batch several invokes in one Mojo round-trip (same module).
+  InvokeMany(string module_path, array<NodeInvokeCall> calls)
+      => (array<NodeInvokeCallResult> results);
 };

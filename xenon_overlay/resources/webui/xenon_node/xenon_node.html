@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Xenon Node-API 测试平台</title>
+  <link rel="stylesheet" href="chrome://resources/css/text_defaults_md.css">
+  <link rel="stylesheet" href="xenon_node.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="logo">Node</div>
+      <div class="header-info">
+        <h1>Xenon Node-API 模块测试平台</h1>
+        <p class="subtitle">用于动态加载并交互测试标准的 Node-API (N-API) 原生扩展模块</p>
+      </div>
+      <div class="nav-bar">
+        <a href="chrome://xenon-ui" class="btn btn-secondary btn-sm">返回常规 UI 测试</a>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <!-- Section 1: Load Module -->
+      <section class="card config-card">
+        <h2 class="card-title">require("*.node")</h2>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label for="addon-path">Node 插件本地路径 (.node)</label>
+            <input type="text" id="addon-path" placeholder="请输入绝对路径，例如: D:\path\to\addon.node">
+          </div>
+        </div>
+        <div class="action-bar">
+          <button id="btn-load" class="btn btn-primary">require 模块</button>
+        </div>
+        <div class="status-box mt-3" id="load-status">
+          <span class="status-dot status-offline"></span>
+          <span class="status-text">未 require 模块</span>
+        </div>
+        <div class="exports-panel mt-3" id="exports-panel" hidden>
+          <div class="exports-panel-header">
+            <span>导出列表</span>
+            <span class="exports-count" id="exports-count"></span>
+          </div>
+          <ul class="exports-tree" id="exports-tree"></ul>
+        </div>
+      </section>
+
+      <!-- Section 2: Call Sync & Async APIs -->
+      <section class="card test-card disabled-card" id="card-testing">
+        <h2 class="card-title">函数交互测试 (API Interaction)</h2>
+        
+        <!-- Tab 1: Sync Add -->
+        <div class="test-group">
+          <h3>1. 同步加法测试 (Sync Add)</h3>
+          <p class="test-desc">调用原生 C++ 同步函数 <code>Add(a, b)</code></p>
+          <div class="input-row">
+            <input type="number" id="sync-a" value="10" placeholder="数字 A">
+            <span class="math-operator">+</span>
+            <input type="number" id="sync-b" value="20" placeholder="数字 B">
+            <button id="btn-sync-call" class="btn btn-secondary btn-sm">执行 (Call)</button>
+          </div>
+          <div class="result-box" id="sync-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <!-- Tab 2: Async Add -->
+        <div class="test-group">
+          <h3>2. 异步加法测试 (Async Add via ThreadPool)</h3>
+          <p class="test-desc">在 Chromium 线程池中异步执行 <code>AsyncAdd(a, b, callback)</code></p>
+          <div class="input-row">
+            <input type="number" id="async-a" value="100" placeholder="数字 A">
+            <span class="math-operator">+</span>
+            <input type="number" id="async-b" value="200" placeholder="数字 B">
+            <button id="btn-async-call" class="btn btn-secondary btn-sm">异步执行 (Call)</button>
+          </div>
+          <div class="result-box" id="async-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <!-- Tab 3: Threadsafe Callbacks -->
+        <div class="test-group">
+          <h3>3. 跨线程通知测试 (Threadsafe Callbacks)</h3>
+          <p class="test-desc">启动后台物理线程通过 <code>StartThread(callback)</code> 触发主线程回调</p>
+          <div class="action-bar-start">
+            <button id="btn-thread-start" class="btn btn-primary btn-sm">启动后台线程 (Start Thread)</button>
+          </div>
+          <div class="result-box" id="thread-result">状态: 未运行</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="test-group">
+          <h3>4. 复杂类型测试 (Object / Array / Bool / Null)</h3>
+          <p class="test-desc">调用 <code>InspectTypes(payload)</code> 验证结构化参数与返回值</p>
+          <div class="action-bar-start">
+            <button id="btn-types-call" class="btn btn-secondary btn-sm">执行复杂类型测试</button>
+          </div>
+          <div class="result-box result-pre" id="types-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="test-group">
+          <h3>5. 二进制测试 (Buffer / ArrayBuffer)</h3>
+          <p class="test-desc">调用 <code>BinaryEcho(bytes)</code> 验证二进制参数与返回值</p>
+          <div class="action-bar-start">
+            <button id="btn-binary-call" class="btn btn-secondary btn-sm">执行二进制测试</button>
+          </div>
+          <div class="result-box result-pre" id="binary-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="test-group">
+          <h3>6. Promise 返回测试</h3>
+          <p class="test-desc">调用 <code>PromiseValue()</code> 验证标准 N-API promise 返回值</p>
+          <div class="action-bar-start">
+            <button id="btn-promise-call" class="btn btn-secondary btn-sm">执行 Promise 测试</button>
+          </div>
+          <div class="result-box result-pre" id="promise-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="test-group">
+          <h3>7. 多 Callback 测试</h3>
+          <p class="test-desc">调用 <code>MultiCallback(first, second)</code> 验证多个回调参数分发</p>
+          <div class="action-bar-start">
+            <button id="btn-multi-callback-call" class="btn btn-secondary btn-sm">执行多回调测试</button>
+          </div>
+          <div class="result-box result-pre" id="multi-callback-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="test-group">
+          <h3>8. 异常链路测试</h3>
+          <p class="test-desc">调用 <code>ThrowComplexError()</code> 验证 addon 异常传回 WebUI</p>
+          <div class="action-bar-start">
+            <button id="btn-error-call" class="btn btn-secondary btn-sm">执行异常测试</button>
+          </div>
+          <div class="result-box result-pre" id="error-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="test-group">
+          <h3>9. libuv 事件循环测试</h3>
+          <p class="test-desc">调用 <code>UvTimer(callback)</code> 验证真实 libuv 定时器回调</p>
+          <div class="action-bar-start">
+            <button id="btn-uv-timer-call" class="btn btn-secondary btn-sm">执行 libuv 定时器测试</button>
+          </div>
+          <div class="result-box result-pre" id="uv-timer-result">结果: --</div>
+        </div>
+      </section>
+
+      <section class="card test-card disabled-card" id="card-pc-addon" hidden>
+        <h2 class="card-title">pc_addon 测试</h2>
+
+        <div class="test-group">
+          <h3>1. initAddon</h3>
+          <p class="test-desc">初始化播放器运行时；留空时从当前 addon 路径推导运行目录</p>
+          <div class="input-row">
+            <input type="text" id="pc-runtime-dir"
+                   placeholder="运行目录，例如 H:\chromium_142\src\out\Debug_64">
+            <button id="btn-pc-init-addon" class="btn btn-secondary btn-sm">执行 initAddon</button>
+          </div>
+          <div class="result-box result-pre" id="pc-init-addon-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="test-group">
+          <h3>2. setPlayableExt</h3>
+          <p class="test-desc">调用 <code>setPlayableExt(["mp4", "mkv"])</code> 验证原版 addon 的基础函数链路</p>
+          <div class="action-bar-start">
+            <button id="btn-pc-set-playable-ext" class="btn btn-secondary btn-sm">执行 setPlayableExt</button>
+          </div>
+          <div class="result-box result-pre" id="pc-set-playable-ext-result">结果: --</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="test-group">
+          <h3>3. openMedia</h3>
+          <p class="test-desc">与 Electron 同形：<code>const stack = new NativeAplayerStack(); await stack.openMedia(attr)</code>。页面会使用 <code>XenonWebDialog</code> 创建原生播放容器并自动完成窗口绑定。http(s)→<code>MtWeb</code>，本地→<code>MtNewXmpLocal</code>。</p>
+          <div class="input-row">
+            <input type="text" id="pc-open-media-url"
+                   value="https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8"
+                   placeholder="playUrl：本地路径或 m3u8/http 地址">
+            <button id="btn-pc-open-media" class="btn btn-secondary btn-sm">执行 openMedia</button>
+          </div>
+          <div class="result-box result-pre" id="pc-open-media-result">结果: --</div>
+        </div>
+      </section>
+
+      <!-- Section 3: Exec Logs -->
+      <section class="card log-card">
+        <div class="log-header">
+          <h2 class="card-title">运行时日志 (Execution Logs)</h2>
+          <button id="btn-clear-logs" class="btn btn-secondary btn-sm">清空日志</button>
+        </div>
+        <div id="log-list" class="log-list">
+          <div class="log-item empty-state">暂无日志，加载模块后开始测试</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="xenon_node.js"></script>
+</body>
+</html>

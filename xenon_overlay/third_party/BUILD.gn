@@ -1,0 +1,155 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+config("libuv_public_config") {
+  include_dirs = [ "libuv/include" ]
+}
+
+config("libuv_warnings") {
+  if (is_win) {
+    cflags = [
+      "/WX-",
+      "-Wno-deprecated-declarations",
+      "-Wno-incompatible-pointer-types",
+      "-Wno-missing-braces",
+      "-Wno-string-conversion",
+      "-Wno-unused-function",
+    ]
+  } else {
+    cflags = [ "-Wno-error" ]
+    ldflags = [ "-Wno-error" ]
+  }
+}
+
+source_set("libuv") {
+  include_dirs = [ "libuv/src" ]
+
+  sources = [
+    "libuv/src/fs-poll.c",
+    "libuv/src/idna.c",
+    "libuv/src/inet.c",
+    "libuv/src/random.c",
+    "libuv/src/strscpy.c",
+    "libuv/src/threadpool.c",
+    "libuv/src/timer.c",
+    "libuv/src/uv-common.c",
+    "libuv/src/uv-data-getter-setters.c",
+    "libuv/src/version.c",
+  ]
+
+  public_configs = [ ":libuv_public_config" ]
+
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    ":libuv_warnings",
+  ]
+
+  if (is_win) {
+    defines = [
+      "BUILDING_UV_SHARED",
+      "WIN32_LEAN_AND_MEAN",
+    ]
+    sources += [
+      "libuv/src/win/async.c",
+      "libuv/src/win/core.c",
+      "libuv/src/win/detect-wakeup.c",
+      "libuv/src/win/dl.c",
+      "libuv/src/win/error.c",
+      "libuv/src/win/fs-event.c",
+      "libuv/src/win/fs.c",
+      "libuv/src/win/getaddrinfo.c",
+      "libuv/src/win/getnameinfo.c",
+      "libuv/src/win/handle.c",
+      "libuv/src/win/loop-watcher.c",
+      "libuv/src/win/pipe.c",
+      "libuv/src/win/poll.c",
+      "libuv/src/win/process-stdio.c",
+      "libuv/src/win/process.c",
+      "libuv/src/win/signal.c",
+      "libuv/src/win/snprintf.c",
+      "libuv/src/win/stream.c",
+      "libuv/src/win/tcp.c",
+      "libuv/src/win/thread.c",
+      "libuv/src/win/tty.c",
+      "libuv/src/win/udp.c",
+      "libuv/src/win/util.c",
+      "libuv/src/win/winapi.c",
+      "libuv/src/win/winsock.c",
+    ]
+    libs = [
+      "advapi32.lib",
+      "iphlpapi.lib",
+      "psapi.lib",
+      "user32.lib",
+      "userenv.lib",
+      "ws2_32.lib",
+    ]
+  } else {
+    defines = [
+      "_FILE_OFFSET_BITS=64",
+      "_LARGEFILE_SOURCE",
+    ]
+    libs = [ "pthread" ]
+    sources += [
+      "libuv/src/unix/async.c",
+      "libuv/src/unix/core.c",
+      "libuv/src/unix/dl.c",
+      "libuv/src/unix/fs.c",
+      "libuv/src/unix/getaddrinfo.c",
+      "libuv/src/unix/getnameinfo.c",
+      "libuv/src/unix/loop-watcher.c",
+      "libuv/src/unix/loop.c",
+      "libuv/src/unix/pipe.c",
+      "libuv/src/unix/poll.c",
+      "libuv/src/unix/process.c",
+      "libuv/src/unix/random-devurandom.c",
+      "libuv/src/unix/signal.c",
+      "libuv/src/unix/stream.c",
+      "libuv/src/unix/tcp.c",
+      "libuv/src/unix/thread.c",
+      "libuv/src/unix/tty.c",
+      "libuv/src/unix/udp.c",
+    ]
+
+    if (is_linux || is_mac) {
+      sources += [ "libuv/src/unix/proctitle.c" ]
+    }
+
+    if (is_linux) {
+      defines += [
+        "_GNU_SOURCE",
+        "_POSIX_C_SOURCE=200112",
+      ]
+      sources += [
+        "libuv/src/unix/epoll.c",
+        "libuv/src/unix/linux-core.c",
+        "libuv/src/unix/linux-inotify.c",
+        "libuv/src/unix/linux-syscalls.c",
+        "libuv/src/unix/procfs-exepath.c",
+        "libuv/src/unix/random-getrandom.c",
+        "libuv/src/unix/random-sysctl-linux.c",
+      ]
+      libs += [
+        "dl",
+        "rt",
+      ]
+    } else if (is_mac) {
+      defines += [
+        "_DARWIN_UNLIMITED_SELECT=1",
+        "_DARWIN_USE_64_BIT_INODE=1",
+      ]
+      sources += [
+        "libuv/src/unix/bsd-ifaddrs.c",
+        "libuv/src/unix/darwin-proctitle.c",
+        "libuv/src/unix/darwin.c",
+        "libuv/src/unix/fsevents.c",
+        "libuv/src/unix/kqueue.c",
+        "libuv/src/unix/random-getentropy.c",
+      ]
+    } else {
+      assert(false, "Xenon libuv supports Windows, macOS, and Linux only.")
+    }
+  }
+}

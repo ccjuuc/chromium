@@ -1,6 +1,8 @@
 #ifndef XENON_OVERLAY_CHROME_BROWSER_XENON_MANAGER_H_
 #define XENON_OVERLAY_CHROME_BROWSER_XENON_MANAGER_H_
 
+#include <cstdint>
+
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/singleton.h"
@@ -32,6 +34,11 @@ FORWARD_DECLARE_TEST(XenonManagerTest, Ping_WhenDisconnected_ReturnsNotRunning);
 FORWARD_DECLARE_TEST(XenonManagerTest, PingAssociated_WhenDisconnected_ReturnsError);
 #endif
 
+class XenonNodeObserver {
+ public:
+  virtual void OnThreadCallback(const std::string& message) = 0;
+};
+
 // Singleton manager for the Xenon Service in the Browser process.
 //
 // Optional pieces (GN in xenon_overlay/buildflags/features.gni):
@@ -47,6 +54,10 @@ class XenonManager {
   static XenonManager* GetInstance();
 
   void EnsureServiceStarted(content::BrowserContext* context);
+  uint64_t service_generation() const { return service_generation_; }
+
+  void RegisterNodeObserver(XenonNodeObserver* observer);
+  void UnregisterNodeObserver(XenonNodeObserver* observer);
 
   using PingCallback = base::OnceCallback<void(const std::string&)>;
   void Ping(PingCallback callback);
@@ -70,12 +81,14 @@ class XenonManager {
       base::OnceCallback<void(const std::string& message)>;
 
   void OnServiceEvent(const std::string& message) override;
+  void OnThreadCallback(const std::string& message) override;
 
   // WebUI: wait for the next Utility→Browser `OnServiceEvent` payload (tests
   // XenonBrowserObserver / SetBrowserObserver). Empty `message` means timeout,
   // disconnect, or no observer build.
   void CaptureNextObserverEventForTest(ObserverEventTestCallback callback);
 #endif
+
 
  private:
   friend struct base::DefaultSingletonTraits<XenonManager>;
@@ -113,6 +126,8 @@ class XenonManager {
   mojo::Receiver<mojom::XenonBrowserObserver> browser_observer_receiver_{this};
   ObserverEventTestCallback observer_event_test_callback_;
 #endif
+  raw_ptr<XenonNodeObserver> node_observer_ = nullptr;
+  uint64_t service_generation_ = 0;
 };
 
 }  // namespace xenon

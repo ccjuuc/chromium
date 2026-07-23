@@ -32,3 +32,4 @@ build_webui("resources") {
 
   grit_output_dir = "$target_gen_dir"
 }
+

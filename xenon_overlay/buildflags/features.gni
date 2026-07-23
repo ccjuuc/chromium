@@ -25,6 +25,11 @@ declare_args() {
   # Xenon AI: Profile KeyedService + chrome://xenon-ai-side-panel WebUI + Side Panel entry.
   enable_xenon_ai = enable_xenon_service
 
+  # Enables Node/Electron-style compatibility exports backed by a statically
+  # linked libuv for native addons on supported desktop platforms.
+  enable_xenon_node_uv_compat =
+      (is_win || is_mac || is_linux) && enable_xenon_service
+
   # Cargo-built xenon_ai_inferencer_burn (GN action → $root_out_dir) via
   # tools/crates/run_cargo.py + //third_party/rust-toolchain. Set false to skip
   # the action (copy a sidecar into out/ manually if needed).

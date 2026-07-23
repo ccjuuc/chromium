@@ -1,6 +1,7 @@
 import("//build/config/ui.gni")
 import("//third_party/skia/modules/svg/svg.gni")
 import("//xenon_overlay/buildflags/features.gni")
+import("//testing/test.gni")
 
 source_set("xenon_prefs") {
   sources = [
@@ -56,6 +57,31 @@ source_set("xenon_common_dialog") {
   ]
 }
 
+source_set("napi") {
+  sources = [
+    "napi/js_native_api.h",
+    "napi/js_native_api_types.h",
+    "napi/js_native_api_v8.h",
+    "napi/js_native_api_v8.cc",
+    "napi/node_api.h",
+    "napi/napi_loader.h",
+    "napi/napi_loader.cc",
+    "napi/napi_switches.h",
+  ]
+  deps = [
+    "//base",
+    "//gin",
+    "//v8",
+    "//xenon_overlay/buildflags",
+  ]
+  if (enable_xenon_node_uv_compat) {
+    deps += [ "//xenon_overlay/third_party:libuv" ]
+  }
+  if (is_win && enable_xenon_node_uv_compat) {
+    data_deps = [ ":node_exe" ]
+  }
+}
+
 source_set("browser") {
   defines = []
   sources = [
@@ -74,6 +100,8 @@ source_set("browser") {
     "ui/webui/xenon_page_handler.h",
     "ui/webui/xenon_ui_controller.cc",
     "ui/webui/xenon_ui_controller.h",
+    "ui/webui/xenon_node_controller.cc",
+    "ui/webui/xenon_node_controller.h",
     "ui/webui/xenon_webui_controller.cc",
     "ui/webui/xenon_webui_controller.h",
     "ui/webui/xenon_webui_dev_proxy.cc",
@@ -158,7 +186,11 @@ source_set("browser") {
     "//xenon_overlay/chrome/browser/ui/webui:mojo_bindings",
     "//xenon_overlay/public/mojom",
     "//xenon_overlay/resources",
+    "//xenon_overlay/resources/webui:resources",
+    "//xenon_overlay/resources/webui/xenon_node:resources",
     "//xenon_overlay/xenon/chrome/browser/ui/views:xenon_toast",
+    "//gin",
+    ":napi",
   ]
 
   if (enable_xenon_ai) {
@@ -188,4 +220,104 @@ if (enable_xenon_service) {
       "//testing/gtest",
     ]
   }
+}
+
+if (enable_xenon_node_uv_compat) {
+  source_set("napi_node_exports") {
+    sources = [
+      "napi/js_native_api_v8.cc",
+      "napi/js_native_api_v8.h",
+    ]
+    include_dirs = [ "napi" ]
+    deps = [
+      "//base",
+      "//v8",
+      "//xenon_overlay/buildflags",
+      "//xenon_overlay/third_party:libuv",
+    ]
+  }
+}
+
+if (is_win) {
+  shared_library("node") {
+    sources = [
+      "napi/js_native_api_v8.cc",
+      "napi/js_native_api_v8.h",
+    ]
+    include_dirs = [ "napi" ]
+    deps = [
+      "//base",
+      "//v8",
+      "//xenon_overlay/buildflags",
+    ]
+    if (enable_xenon_node_uv_compat) {
+      deps += [ "//xenon_overlay/third_party:libuv" ]
+    }
+  }
+
+  if (enable_xenon_node_uv_compat) {
+    shared_library("node_exe") {
+      output_name = "node"
+      output_extension = "exe"
+      sources = [
+        "napi/js_native_api_v8.cc",
+        "napi/js_native_api_v8.h",
+      ]
+      include_dirs = [ "napi" ]
+      deps = [
+        "//base",
+        "//v8",
+        "//xenon_overlay/buildflags",
+        "//xenon_overlay/third_party:libuv",
+      ]
+    }
+  }
+}
+
+shared_library("test_addon") {
+  testonly = true
+  output_extension = "node"
+  output_prefix_override = true
+  sources = [ "napi/test_addon/test_addon.cc" ]
+  include_dirs = [ "napi" ]
+  deps = []
+  if (enable_xenon_node_uv_compat) {
+    defines = [ "XENON_TEST_UV_COMPAT" ]
+    include_dirs += [ "//xenon_overlay/third_party/libuv/include" ]
+  }
+  if (is_win) {
+    if (enable_xenon_node_uv_compat) {
+      deps += [ ":node_exe" ]
+    } else {
+      deps += [ ":node" ]
+    }
+  } else {
+    configs -= [ "//build/config/compiler:no_unresolved_symbols" ]
+    if (is_mac) {
+      ldflags = [ "-Wl,-undefined,dynamic_lookup" ]
+    }
+  }
+}
+
+test("napi_host_unittests") {
+  testonly = true
+  sources = [
+    "napi/napi_loader_unittest.cc",
+    "napi/js_native_api_v8.cc",
+    "napi/js_native_api_v8.h",
+    "napi/napi_loader.cc",
+    "napi/napi_loader.h",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//base/test:run_all_unittests",
+    "//testing/gtest",
+    "//v8",
+    "//xenon_overlay/buildflags",
+  ]
+  if (enable_xenon_node_uv_compat) {
+    deps += [ "//xenon_overlay/third_party:libuv" ]
+  }
+  data_deps = [ ":test_addon" ]
 }

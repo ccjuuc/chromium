@@ -53,6 +53,11 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/common/result_codes.h"
 #include "third_party/crashpad/crashpad/util/win/initial_client_data.h"
+#include "xenon_overlay/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+#include "xenon_overlay/chrome/app/player_container_process_win.h"
+#endif
 
 #if defined(WIN_CONSOLE_APP)
 // Forward declaration of main.
@@ -261,6 +266,13 @@ int main() {
   base::CommandLine::Init(0, nullptr);
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
+
+#if BUILDFLAG(ENABLE_XENON_NODE_UV_COMPAT)
+  if (std::optional<int> exit_code =
+          xenon::MaybeRunPlayerContainerProcess(*command_line)) {
+    return *exit_code;
+  }
+#endif
 
   const std::string process_type =
       command_line->GetSwitchValueASCII(switches::kProcessType);

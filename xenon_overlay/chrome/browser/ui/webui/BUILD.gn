@@ -4,6 +4,7 @@ mojom("mojo_bindings") {
   sources = [
     "xenon.mojom",
     "xenon_ai.mojom",
+    "xenon_node.mojom",
   ]
   public_deps = [ "//mojo/public/mojom/base" ]
   webui_module_path = "/"

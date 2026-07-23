@@ -913,3 +913,6 @@
 	path = webkit/data/test_shell/plugins
 	url = https://chrome-internal.googlesource.com/chrome/data/webkit_plugin_tests
 	gclient-condition = checkout_src_internal
+[submodule "xenon_overlay/third_party/libuv"]
+	path = xenon_overlay/third_party/libuv
+	url = https://github.com/libuv/libuv.git

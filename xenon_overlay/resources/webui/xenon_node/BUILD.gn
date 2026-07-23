@@ -1,0 +1,80 @@
+import("//tools/grit/grit_rule.gni")
+import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/resources/tools/generate_grd.gni")
+
+action("generate_xenon_node_assets_manifest") {
+  script = "//xenon_overlay/tools/generate_assets_grdp.py"
+
+  inputs = [ "xenon_node.html" ]
+  outputs = [ "$target_gen_dir/xenon_node_assets_manifest.json" ]
+  depfile = "$target_gen_dir/xenon_node_assets_manifest.json.d"
+  args = [
+    rebase_path("assets", root_build_dir),
+    rebase_path("$target_gen_dir/xenon_node_assets_manifest.json",
+                root_build_dir),
+    rebase_path(".", root_build_dir),
+  ]
+}
+
+generate_grd("build_xenon_node_assets_grdp") {
+  grd_prefix = "xenon_node_webui"
+  out_grd = "$target_gen_dir/xenon_node_assets.grdp"
+  manifest_files = [ "$target_gen_dir/xenon_node_assets_manifest.json" ]
+  deps = [ ":generate_xenon_node_assets_manifest" ]
+}
+
+build_webui("build") {
+  grd_prefix = "xenon_node_webui"
+  generate_grdp = true
+
+  static_files = [
+    "xenon_node.html",
+    "xenon_node.css",
+  ]
+
+  ts_files = [
+    "require.ts",
+    "xenon_node.ts",
+  ]
+
+  mojo_files = [
+    "$root_gen_dir/xenon_overlay/chrome/browser/ui/webui/xenon_node.mojom-webui.ts",
+  ]
+  mojo_files_deps = [
+    "//xenon_overlay/chrome/browser/ui/webui:mojo_bindings_ts__generator",
+  ]
+
+  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+
+  webui_context_type = "trusted"
+}
+
+generate_grd("build_grd") {
+  grd_prefix = "xenon_node_webui"
+  out_grd = "$target_gen_dir/resources.grd"
+  grdp_files = [
+    "$target_gen_dir/resources.grdp",
+    "$target_gen_dir/xenon_node_assets.grdp",
+  ]
+  deps = [
+    ":build_grdp",
+    ":build_xenon_node_assets_grdp",
+  ]
+}
+
+grit("resources") {
+  enable_input_discovery_for_gn_analyze = false
+  source = "$target_gen_dir/resources.grd"
+  deps = [ ":build_grd" ]
+  resource_ids = ""
+
+  outputs = [
+    "grit/xenon_node_webui_resources.h",
+    "grit/xenon_node_webui_resources_map.cc",
+    "grit/xenon_node_webui_resources_map.h",
+    "xenon_node_webui_resources.pak",
+  ]
+
+  grit_output_dir = "$target_gen_dir"
+  output_dir = grit_output_dir
+}

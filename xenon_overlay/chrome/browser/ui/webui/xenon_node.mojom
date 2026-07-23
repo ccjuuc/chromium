@@ -1,0 +1,144 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module xenon_node.mojom;
+
+import "mojo/public/mojom/base/values.mojom";
+
+struct NodeInvokeArg {
+  bool is_callback;
+  int32 callback_id;
+  mojo_base.mojom.Value value;
+};
+
+struct NodeCallbackResult {
+  int32 callback_id;
+  mojo_base.mojom.Value value;
+};
+
+struct NodeExportInfo {
+  string name;
+  // See xenon.mojom.NodeExportInfo for the value kinds.
+  string kind;
+  bool enumerable;
+  bool writable;
+  bool has_value;
+  mojo_base.mojom.Value value;
+  array<NodeExportInfo> children;
+  array<NodeExportInfo> prototype;
+};
+
+struct NodeInvokeCall {
+  string function_name;
+  array<NodeInvokeArg> args;
+};
+
+struct NodeInvokeCallResult {
+  bool success;
+  mojo_base.mojom.Value result;
+  array<NodeCallbackResult> callback_results;
+  string error_msg;
+};
+
+// Browser-to-page callbacks for chrome://xenon-node/.
+interface Page {
+  NodeModuleLoaded(string path,
+                   bool success,
+                   string error_msg,
+                   array<NodeExportInfo> exports);
+
+  NodeInvokeResult(int32 request_id,
+                   bool success,
+                   mojo_base.mojom.Value result,
+                   array<NodeCallbackResult> callback_results,
+                   string error_msg);
+
+  NodeCallbackInvoked(int32 callback_id, array<mojo_base.mojom.Value> args);
+
+  NodeCallbackReleased(int32 callback_id);
+
+  // The Utility process was relaunched. Module loads are replayed by the
+  // browser, but native instances and retained callbacks from the old process
+  // are no longer valid.
+  NodeServiceReset();
+
+  NodeInspectResult(
+      int32 request_id, bool success, string error_msg, NodeExportInfo? info);
+
+  NodeConstructResult(
+      int32 request_id, bool success, int32 instance_id, string error_msg);
+
+  NodeInvokeManyResult(
+      int32 request_id, array<NodeInvokeCallResult> results);
+
+  NodePropertyResult(int32 request_id,
+                     bool success,
+                     mojo_base.mojom.Value result,
+                     string error_msg);
+
+  NodeSetPropertyResult(int32 request_id, bool success, string error_msg);
+};
+
+// Page-to-browser commands for chrome://xenon-node/.
+interface PageHandler {
+  // Creates or reuses a XenonWebDialog as the native player host. Handles are
+  // decimal strings because JavaScript numbers cannot represent every native
+  // pointer value on 64-bit platforms.
+  PreparePlayerHost()
+      => (string float_window, string parent_window, string error_msg);
+
+  RequireNodeModule(string path);
+
+  InvokeNodeExport(int32 request_id,
+                   string module_path,
+                   string function_name,
+                   array<NodeInvokeArg> args);
+
+  InspectNodeExport(
+      int32 request_id, string module_path, string export_path);
+
+  ConstructNodeExport(int32 request_id,
+                      string module_path,
+                      string export_path,
+                      array<NodeInvokeArg> args);
+
+  InvokeNodeInstance(int32 request_id,
+                     string module_path,
+                     int32 instance_id,
+                     string method_name,
+                     array<NodeInvokeArg> args);
+
+  GetNodeInstanceProperty(int32 request_id,
+                          string module_path,
+                          int32 instance_id,
+                          string property_name);
+
+  SetNodeInstanceProperty(int32 request_id,
+                          string module_path,
+                          int32 instance_id,
+                          string property_name,
+                          mojo_base.mojom.Value value);
+
+  ReleaseNodeInstance(string module_path, int32 instance_id);
+
+  GetNodeExportProperty(int32 request_id,
+                        string module_path,
+                        string object_path,
+                        string property_name);
+
+  SetNodeExportProperty(int32 request_id,
+                        string module_path,
+                        string object_path,
+                        string property_name,
+                        mojo_base.mojom.Value value);
+
+  InvokeNodeExports(
+      int32 request_id, string module_path, array<NodeInvokeCall> calls);
+};
+
+// Used by the WebUI page to bootstrap bidirectional communication.
+interface PageHandlerFactory {
+  CreatePageHandler(
+      pending_remote<Page> page, pending_receiver<PageHandler> handler);
+};

@@ -1,14 +1,25 @@
+import("//xenon_overlay/buildflags/features.gni")
+
 source_set("xenon_service") {
   sources = [
+    "xenon_node_executor.cc",
+    "xenon_node_executor.h",
     "xenon_service_impl.cc",
     "xenon_service_impl.h",
   ]
 
   deps = [
     "//base",
+    "//gin",
     "//mojo/public/cpp/bindings",
     "//services/network/public/cpp",
-    "//xenon_overlay/buildflags:buildflags",
+    "//v8",
+    "//xenon_overlay/buildflags",
+    "//xenon_overlay/chrome/browser:napi",
     "//xenon_overlay/public/mojom",
   ]
+
+  if (enable_xenon_node_uv_compat) {
+    deps += [ "//xenon_overlay/third_party:libuv" ]
+  }
 }

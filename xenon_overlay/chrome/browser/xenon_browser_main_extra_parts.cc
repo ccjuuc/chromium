@@ -15,6 +15,7 @@
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
 #include "xenon_overlay/chrome/browser/ui/webui/simple_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_ui_controller.h"
+#include "xenon_overlay/chrome/browser/ui/webui/xenon_node_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/video_sniffer_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_webui_controller.h"
 #include "xenon_overlay/chrome/browser/xenon_extension_manager.h"
@@ -108,6 +109,10 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::XenonUIConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonUIConfig";
+
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::XenonNodeConfig>());
+  LOG(INFO) << "XenonBrowserMainExtraParts: Registered XenonNodeConfig";
 
 #if BUILDFLAG(ENABLE_XENON_AI)
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(

@@ -234,7 +234,15 @@ if (!is_android && !is_mac) {
         "//third_party/breakpad:breakpad_sender",
         "//third_party/crashpad/crashpad/util",
         "//ui/gl",
+        "//xenon_overlay/buildflags",
       ]
+
+      if (enable_xenon_node_uv_compat) {
+        deps += [
+          "//xenon_overlay/chrome/app:player_container_process",
+          "//xenon_overlay/chrome/browser:napi_node_exports",
+        ]
+      }
 
       data_deps = [
         "//chrome/app/version_assembly:version_assembly_manifest",
@@ -1560,9 +1568,14 @@ if (!is_android) {
     # (resources.pak) so ResourceBundle loads them with default pak startup path.
     additional_extra_paks = [
       "$root_gen_dir/xenon_overlay/resources/xenon_resources.pak",
+      "$root_gen_dir/xenon_overlay/resources/webui/xenon_webui_resources.pak",
+      "$root_gen_dir/xenon_overlay/resources/webui/xenon_node/xenon_node_webui_resources.pak",
     ]
-    _packed_resources_xenon_grit_dep =
-        [ "//xenon_overlay/resources:resources_grit" ]
+    _packed_resources_xenon_grit_dep = [
+      "//xenon_overlay/resources:resources_grit",
+      "//xenon_overlay/resources/webui:resources",
+      "//xenon_overlay/resources/webui/xenon_node:resources",
+    ]
 
     if (enable_resource_allowlist_generation) {
       repack_allowlist = _chrome_resource_allowlist
