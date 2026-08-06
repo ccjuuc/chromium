@@ -13,6 +13,7 @@
 #include "xenon_overlay/chrome/browser/reminder/xenon_reminder_notification_manager.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_reminder_browser_observer.h"
 #include "xenon_overlay/chrome/browser/ui/xenon_web_dialog.h"
+#include "xenon_overlay/chrome/browser/ui/webui/dev_test_pages_webui.h"
 #include "xenon_overlay/chrome/browser/ui/webui/simple_webui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_ui_controller.h"
 #include "xenon_overlay/chrome/browser/ui/webui/xenon_node_controller.h"
@@ -101,6 +102,13 @@ void XenonBrowserMainExtraParts::PostProfileInit(Profile* profile,
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::SimpleWebUIConfig>());
   LOG(INFO) << "XenonBrowserMainExtraParts: Registered SimpleWebUIConfig";
+
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::LocalVideoTestWebUIConfig>());
+  content::WebUIConfigMap::GetInstance().AddWebUIConfig(
+      std::make_unique<xenon::RenderDllTestWebUIConfig>());
+  LOG(INFO) << "XenonBrowserMainExtraParts: Registered local-video-test / "
+               "render-dll-test WebUI";
 
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<xenon::VideoSnifferWebUIConfig>());

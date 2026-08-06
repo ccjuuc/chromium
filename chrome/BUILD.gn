@@ -393,6 +393,11 @@ if (!is_android && !is_mac) {
       "//third_party/widevine/cdm",
     ]
 
+    # window.renderDll smoke test module — land next to xenon.exe / chrome.exe.
+    if ((is_win || is_mac || is_linux) && !is_official_build) {
+      data_deps += [ "//tools/render_dll_add" ]
+    }
+
     if (enable_xenon_ai && build_xenon_ai_inferencer_burn) {
       data_deps += [ "//xenon_overlay/xenon_ai_inferencer_burn" ]
     }

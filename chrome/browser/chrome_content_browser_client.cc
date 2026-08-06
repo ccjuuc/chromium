@@ -186,6 +186,7 @@
 #include "chrome/browser/webapps/web_app_offline.h"
 #include "chrome/browser/webauthn/chrome_web_authentication_delegate_base.h"
 #include "chrome/browser/webauthn/webauthn_pref_names.h"
+#include "chrome/common/beijing/render_dll_names.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_constants.h"
@@ -2330,6 +2331,16 @@ void ChromeContentBrowserClient::SiteInstanceGotProcessAndSite(
     SiteInstance* site_instance) {
   CHECK(site_instance->HasProcess());
 
+#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && \
+    !defined(OFFICIAL_BUILD)
+  const GURL& site_url = site_instance->GetSiteURL();
+  if (site_url.SchemeIs(content::kChromeUIScheme) &&
+      site_url.host() == beijing::kRenderDllTestHost) {
+    render_dll_test_process_ids_.insert(
+        site_instance->GetProcess()->GetDeprecatedID());
+  }
+#endif
+
   Profile* profile =
       Profile::FromBrowserContext(site_instance->GetBrowserContext());
   if (!profile) {
@@ -2740,6 +2751,12 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
     content::RenderProcessHost* process =
         content::RenderProcessHost::FromID(child_process_id);
     if (process) {
+#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && \
+    !defined(OFFICIAL_BUILD)
+      if (render_dll_test_process_ids_.contains(child_process_id)) {
+        command_line->AppendSwitch(beijing::kPreloadRenderDllSwitch);
+      }
+#endif
       for (auto& part : extra_parts_) {
         part->AppendExtraRendererCommandLineSwitches(command_line, *process);
       }
@@ -5169,6 +5186,27 @@ bool ChromeContentBrowserClient::PreSpawnChild(
     sandbox::mojom::Sandbox sandbox_type,
     ChildSpawnFlags flags) {
   DCHECK(!config->IsConfigured());
+
+  // Dev-only (Win): AllowFileAccess for compile-time render_dll modules under
+  // USER_LOCKDOWN (else on-demand loadDll → ERROR_ACCESS_DENIED / 5). Same
+  // Win32 absolute paths as AllowExtraDll below (see render_dll_names.h).
+  // Private deps are LoadNativeLibrary'd by abs path in loadDll so the PE
+  // loader does not open imports via a path form outside this rule.
+#if BUILDFLAG(IS_WIN) && !defined(OFFICIAL_BUILD) && \
+    !defined(COMPONENT_BUILD)
+  if (sandbox_type == sandbox::mojom::Sandbox::kRenderer) {
+    const bool file_ok = beijing::ForEachRenderDllPathNextToExe(
+        [&](const base::FilePath& render_dll_path) {
+          return config->AllowFileAccess(sandbox::FileSemantics::kAllowReadonly,
+                                         render_dll_path.value().c_str()) ==
+                 sandbox::SBOX_ALL_OK;
+        });
+    if (!file_ok) {
+      return false;
+    }
+  }
+#endif  // IS_WIN && !OFFICIAL_BUILD && !COMPONENT_BUILD
+
 // Does not work under component build because all the component DLLs would need
 // to be manually added and maintained. Does not work under ASAN build because
 // ASAN has not yet fully initialized its instrumentation by the time the CIG
@@ -5213,7 +5251,7 @@ bool ChromeContentBrowserClient::PreSpawnChild(
     return true;
   }
 
-  // Only enable signing mitigation if launching from chrome.exe.
+  // Only enable signing mitigation if launching from the browser exe.
   base::FilePath exe_path;
   if (!base::PathService::Get(base::FILE_EXE, &exe_path)) {
     return true;
@@ -5222,6 +5260,7 @@ bool ChromeContentBrowserClient::PreSpawnChild(
     return true;
   }
 
+  // CIG on (startup). AllowExtraDll must follow - it DCHECKs this flag.
   sandbox::MitigationFlags mitigations = config->GetProcessMitigations();
   mitigations |= sandbox::MITIGATION_FORCE_MS_SIGNED_BINS;
   sandbox::ResultCode result = config->SetProcessMitigations(mitigations);
@@ -5229,13 +5268,28 @@ bool ChromeContentBrowserClient::PreSpawnChild(
     return false;
   }
 
-  // Allow loading Chrome's DLLs.
+  // CIG whitelist: path still subject to MicrosoftSignedOnly at the OS, but
+  // matching paths are mapped via the NtCreateSection broker (ASK_BROKER).
   for (const auto* dll : {chrome::kBrowserResourcesDll, chrome::kElfDll}) {
     result = config->AllowExtraDll(GetModulePath(dll).value().c_str());
     if (result != sandbox::SBOX_ALL_OK) {
       return false;
     }
   }
+
+#if !defined(OFFICIAL_BUILD)
+  // Whitelist unsigned render_dll modules (see render_dll_names.h).
+  if (sandbox_type == sandbox::mojom::Sandbox::kRenderer) {
+    const bool extra_ok = beijing::ForEachRenderDllPathNextToExe(
+        [&](const base::FilePath& render_dll_path) {
+          return config->AllowExtraDll(render_dll_path.value().c_str()) ==
+                 sandbox::SBOX_ALL_OK;
+        });
+    if (!extra_ok) {
+      return false;
+    }
+  }
+#endif  // !defined(OFFICIAL_BUILD)
 #endif  // !defined(COMPONENT_BUILD) && !defined(ADDRESS_SANITIZER)
   return true;
 }

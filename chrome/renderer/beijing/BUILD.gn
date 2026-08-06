@@ -8,9 +8,12 @@ source_set("beijing") {
     "beijing_render_frame_observer.cc",
     "js_beijing_api.h",
     "js_beijing_api.cc",
+    "js_render_dll_api.h",
+    "js_render_dll_api.cc",
   ]
   deps = [
     "//chrome/common/beijing:mojom",
+    "//chrome/common/beijing:render_dll_names",
     "//content/public/renderer",
     "//gin",
     "//mojo/public/cpp/bindings",

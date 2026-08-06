@@ -76,7 +76,8 @@ enum WrappablePointerTag : uint16_t {
   kWrappedExceptionHandler,      // extensions::WrappedExceptionHandler
   kXenonPageApi,                 // xenon::JSXenonApi
   kBeijingPageApi,               // beijing::JSBeijingApi
-  kLastPointerTag = kBeijingPageApi,
+  kBeijingRenderDllApi,          // beijing::JSRenderDllApi
+  kLastPointerTag = kBeijingRenderDllApi,
 };
 
 static_assert(kLastPointerTag <

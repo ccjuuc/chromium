@@ -12,13 +12,14 @@
 
 namespace beijing {
 
-// 渲染器端观察器：在 DidClearWindowObject() 时向允许的域名注入全局 window.beijing 对象
+// 渲染器端观察器：在 DidClearWindowObject() 时向允许的域名注入全局 API
 class BeijingRenderFrameObserver : public content::RenderFrameObserver {
  public:
   explicit BeijingRenderFrameObserver(content::RenderFrame* render_frame);
 
   BeijingRenderFrameObserver(const BeijingRenderFrameObserver&) = delete;
-  BeijingRenderFrameObserver& operator=(const BeijingRenderFrameObserver&) = delete;
+  BeijingRenderFrameObserver& operator=(const BeijingRenderFrameObserver&) =
+      delete;
 
  private:
   void OnDestruct() override;
@@ -29,8 +30,13 @@ class BeijingRenderFrameObserver : public content::RenderFrameObserver {
 
   void DidClearWindowObject() override;
 
-  bool IsPageUrlEligibleForApi(const GURL& url) const;
+  bool IsPageUrlEligibleForBeijingApi(const GURL& url) const;
   bool ShouldExposeBeijingApi() const;
+
+#if !defined(OFFICIAL_BUILD)
+  bool IsPageUrlEligibleForRenderDllApi(const GURL& url) const;
+  bool ShouldExposeRenderDllApi() const;
+#endif
 
   GURL last_navigation_url_;
 };

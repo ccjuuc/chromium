@@ -365,6 +365,10 @@ group("gn_all") {
       }
     }
 
+    if (is_win || is_mac || is_linux) {
+      deps += [ "//tools/render_dll_add" ]
+    }
+
     if (is_mac) {
       deps += [
         "//chrome/installer/gcapi_mac:gcapi_example",

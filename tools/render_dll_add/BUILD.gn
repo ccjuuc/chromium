@@ -1,0 +1,32 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Cross-platform C ABI libraries for window.renderDll tests.
+# Stems must match kRenderDllModuleStems in
+# chrome/common/beijing/render_dll_names.h (deps first, main last):
+#   Win:   out/<build>/render_dll_dep.dll + render_dll_add.dll
+#   Mac:   librender_dll_dep.dylib + librender_dll_add.dylib
+#   Linux: librender_dll_dep.so + librender_dll_add.so
+#
+# Build: autoninja -C out/<dir> tools/render_dll_add:render_dll_add
+# (also pulled in via chrome data_deps when !is_official_build)
+#
+# Non-official: loadDll() loads the main module on demand after sandbox
+# LowerToken; Win needs AllowFileAccess + AllowExtraDll for every stem
+# (non-component). No renderer startup preload.
+
+if (is_win || is_mac || is_linux) {
+  shared_library("render_dll_dep") {
+    sources = [
+      "render_dll_dep.c",
+      "render_dll_dep.h",
+    ]
+    defines = [ "RENDER_DLL_DEP_IMPLEMENTATION" ]
+  }
+
+  shared_library("render_dll_add") {
+    sources = [ "render_dll_add.c" ]
+    deps = [ ":render_dll_dep" ]
+  }
+}

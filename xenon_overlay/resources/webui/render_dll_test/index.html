@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Renderer 进程内 DLL 加载测试页</title>
+  <style>
+    :root {
+      --bg-color: #0b0d12;
+      --card-bg: rgba(18, 22, 31, 0.75);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --primary: #38bdf8; /* Sky Blue */
+      --primary-hover: #0284c7;
+      --secondary: #818cf8; /* Indigo */
+      --secondary-hover: #4f46e5;
+      --accent: #34d399; /* Emerald */
+      --accent-hover: #059669;
+      --warning: #fbbf24; /* Amber */
+      --error: #f87171; /* Rose */
+      --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+      --font-outfit: "Segoe UI", system-ui, sans-serif;
+      --font-mono: Consolas, "Cascadia Mono", "Courier New", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      font-family: var(--font-outfit);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2.5rem 1.5rem;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(129, 140, 248, 0.1) 0px, transparent 50%);
+    }
+
+    .container {
+      width: 100%;
+      max-width: 920px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-weight: 800;
+      font-size: 2.3rem;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.4rem;
+      letter-spacing: -0.025em;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+      font-weight: 300;
+    }
+
+    .connection-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      border: 1px solid var(--border-color);
+      background: rgba(255, 255, 255, 0.03);
+      margin-top: 0.8rem;
+      backdrop-filter: blur(8px);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--warning);
+      box-shadow: 0 0 8px var(--warning);
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.connected {
+      background-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+
+    .status-dot.disconnected {
+      background-color: var(--error);
+      box-shadow: 0 0 8px var(--error);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 1.5rem;
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .card-title {
+      font-size: 1.2rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .card-title.load { color: var(--primary); }
+    .card-title.func { color: var(--secondary); }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    input {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.75rem;
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 0.88rem;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 0.6rem;
+    }
+
+    .btn {
+      padding: 0.7rem 1.1rem;
+      border-radius: 8px;
+      border: none;
+      font-family: var(--font-outfit);
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #000;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: var(--secondary);
+      color: #fff;
+    }
+
+    .btn-secondary:hover {
+      background: var(--secondary-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+    }
+
+    .btn-outline:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .card-full {
+      grid-column: 1 / -1;
+    }
+
+    .console {
+      background: #05070a;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1rem;
+      height: 260px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.8);
+    }
+
+    .log-entry {
+      line-height: 1.4;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .log-time {
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .log-tag {
+      font-weight: bold;
+      padding: 0 0.3rem;
+      border-radius: 3px;
+      font-size: 0.75rem;
+    }
+
+    .log-tag.info { background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
+    .log-tag.ok   { background: rgba(52, 211, 153, 0.2); color: #34d399; }
+    .log-tag.err  { background: rgba(248, 113, 113, 0.2); color: #f87171; }
+
+    .log-msg {
+      word-break: break-all;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.6; }
+      50% { opacity: 1; }
+      100% { opacity: 0.6; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Renderer 进程内 DLL 加载测试控制台</h1>
+    <p class="subtitle">Direct LoadNativeLibrary in Chromium Renderer Process V8 Context</p>
+    <div class="connection-status">
+      <div id="status-dot" class="status-dot"></div>
+      <span id="status-text">检查 window.renderDll API 状态...</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- DLL LOAD PANEL -->
+    <section class="card">
+      <div class="card-title load">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+        加载 / 卸载 DLL 模块
+      </div>
+      <div class="form-group">
+        <label for="dll-path-input">主库绝对路径（须与 exe 同目录；依赖 render_dll_dep 也须同目录并在白名单）</label>
+        <input type="text" id="dll-path-input" value="" placeholder="例如 out/Release_64/render_dll_add.dll">
+      </div>
+      <div class="btn-row">
+        <button id="btn-load" class="btn btn-primary" style="flex:1;">加载 DLL (loadDll)</button>
+        <button id="btn-unload" class="btn btn-outline">卸载 (unloadDll)</button>
+      </div>
+    </section>
+
+    <!-- FUNCTION INVOKE PANEL -->
+    <section class="card">
+      <div class="card-title func">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 16 4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16"/></svg>
+        导出函数调用 (C ABI Add(a, b))
+      </div>
+      <div style="display: flex; gap: 0.8rem;">
+        <div class="form-group" style="flex: 1;">
+          <label for="input-a">参数 a</label>
+          <input type="number" id="input-a" value="25">
+        </div>
+        <div class="form-group" style="flex: 1;">
+          <label for="input-b">参数 b</label>
+          <input type="number" id="input-b" value="17">
+        </div>
+      </div>
+      <div class="btn-row">
+        <button id="btn-invoke" class="btn btn-secondary" style="flex:1;">执行 invokeAdd(a, b)</button>
+        <button id="btn-status" class="btn btn-outline">查看状态</button>
+      </div>
+    </section>
+
+    <!-- LIVE CONSOLE -->
+    <section class="card card-full">
+      <div class="card-title" style="color: var(--accent); justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17 10 11 4 5M12 19h8"/></svg>
+          控制台实时执行日志
+        </div>
+        <button id="btn-clear" class="btn btn-outline" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;">清空日志</button>
+      </div>
+      <div id="console-log" class="console"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+  const logContainer = document.getElementById('console-log');
+  const statusDot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+
+  function log(type, message) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+
+    const time = document.createElement('span');
+    time.className = 'log-time';
+    const now = new Date();
+    time.textContent = `[${now.toTimeString().split(' ')[0]}.${String(now.getMilliseconds()).padStart(3, '0')}]`;
+
+    const tag = document.createElement('span');
+    tag.className = `log-tag ${type}`;
+    tag.textContent = type.toUpperCase();
+
+    const msg = document.createElement('span');
+    msg.className = 'log-msg';
+    msg.textContent = typeof message === 'object' ? JSON.stringify(message, null, 2) : message;
+
+    entry.appendChild(time);
+    entry.appendChild(tag);
+    entry.appendChild(msg);
+
+    logContainer.appendChild(entry);
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
+
+  function checkApi() {
+    if (window.renderDll) {
+      statusDot.className = 'status-dot connected';
+      statusText.textContent = 'Renderer 进程 window.renderDll 已绑定';
+      log('info', 'window.renderDll API 成功挂载在当前 Renderer 进程 V8 上下文');
+      
+      try {
+        const st = window.renderDll.getStatus();
+        log('info', `当前 DLL 加载状态: loaded=${st.loaded}, path=${st.path || '(none)'}`);
+      } catch (e) {
+        log('err', 'getStatus() 异常: ' + e.message);
+      }
+    } else {
+      statusDot.className = 'status-dot disconnected';
+      statusText.textContent =
+          'window.renderDll 未找到（需非官方构建；本页 chrome://render-dll-test/ 已白名单）';
+      log('err',
+          'window.renderDll 为 undefined（官方构建不注入；非官方可用 chrome://render-dll-test/、file:// 或许可域）。');
+    }
+  }
+
+  document.getElementById('btn-load').addEventListener('click', () => {
+    if (!window.renderDll) {
+      log('err', '加载失败: window.renderDll 未绑定');
+      return;
+    }
+    const path = document.getElementById('dll-path-input').value.trim();
+    if (!path) {
+      log('err', '请输入有效的 DLL 文件路径');
+      return;
+    }
+
+    log('info', `正在在 Renderer 进程中请求 LoadNativeLibrary("${path}")...`);
+    try {
+      const res = window.renderDll.loadDll(path);
+      if (res.success) {
+        log('ok', `DLL 加载成功! Handle=${res.handle}, Path=${res.path}`);
+      } else {
+        log('err', `DLL 加载失败: Code=${res.code}, Error="${res.error}"`);
+      }
+    } catch (e) {
+      log('err', `loadDll 抛出异常: ${e.message}`);
+    }
+  });
+
+  document.getElementById('btn-unload').addEventListener('click', () => {
+    if (!window.renderDll) {
+      log('err', '卸载失败: window.renderDll 未绑定');
+      return;
+    }
+    try {
+      const res = window.renderDll.unloadDll();
+      log('info', `卸载结果: unloaded=${res.unloaded}`);
+    } catch (e) {
+      log('err', `unloadDll 异常: ${e.message}`);
+    }
+  });
+
+  document.getElementById('btn-invoke').addEventListener('click', () => {
+    if (!window.renderDll) {
+      log('err', '调用失败: window.renderDll 未绑定');
+      return;
+    }
+    const a = parseInt(document.getElementById('input-a').value, 10) || 0;
+    const b = parseInt(document.getElementById('input-b').value, 10) || 0;
+
+    log('info', `尝试调用 DLL 导出函数 Add(${a}, ${b})...`);
+    try {
+      const result = window.renderDll.invokeAdd(a, b);
+      log('ok', `Add(${a}, ${b}) 返回值 = ${result}`);
+    } catch (e) {
+      log('err', `invokeAdd 失败: ${e.message}`);
+    }
+  });
+
+  document.getElementById('btn-status').addEventListener('click', () => {
+    if (!window.renderDll) {
+      log('err', 'window.renderDll 未绑定');
+      return;
+    }
+    try {
+      const st = window.renderDll.getStatus();
+      log('info', `当前 DLL 状态: ${JSON.stringify(st)}`);
+    } catch (e) {
+      log('err', `getStatus 失败: ${e.message}`);
+    }
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    logContainer.innerHTML = '';
+  });
+
+  // Stem: render_dll_add → Win .dll / Mac librender_dll_add.dylib / Linux .so
+  // C++ loadDll requires the absolute path next to the browser executable.
+  function nativeLibraryFileName() {
+    const stem = 'render_dll_add';
+    const ua = navigator.userAgent || '';
+    if (ua.includes('Windows')) {
+      return stem + '.dll';
+    }
+    if (ua.includes('Mac OS')) {
+      return 'lib' + stem + '.dylib';
+    }
+    return 'lib' + stem + '.so';
+  }
+
+  // Filled by C++ via chrome.send('getDefaultDllPath') → __setDefaultDllPath.
+  window.__setDefaultDllPath = function(path) {
+    const input = document.getElementById('dll-path-input');
+    if (!input) {
+      return;
+    }
+    if (path) {
+      input.value = path;
+      log('info',
+          '已填充 exe 旁主库路径（render_dll_names.h）。加载时会连带 render_dll_dep: ' +
+              path);
+    } else {
+      input.placeholder =
+          '填入浏览器 exe 旁的绝对路径，文件名 ' + nativeLibraryFileName();
+      log('info',
+          '未能解析 exe 目录；请手填绝对路径，文件名应为 ' +
+              nativeLibraryFileName());
+    }
+  };
+
+  window.addEventListener('load', () => {
+    if (typeof chrome !== 'undefined' && typeof chrome.send === 'function') {
+      chrome.send('getDefaultDllPath');
+    } else {
+      window.__setDefaultDllPath('');
+    }
+    setTimeout(checkApi, 200);
+  });
+</script>
+</body>
+</html>

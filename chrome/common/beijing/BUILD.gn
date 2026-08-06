@@ -12,3 +12,10 @@ mojom("mojom") {
     "//mojo/public/mojom/base",
   ]
 }
+
+# Platform-neutral names for //tools/render_dll_* (GetNativeLibraryName).
+# Module list lives in render_dll_names.h (compile-time constexpr).
+source_set("render_dll_names") {
+  sources = [ "render_dll_names.h" ]
+  public_deps = [ "//base" ]
+}

@@ -23,6 +23,7 @@
 #include "base/immediate_crash.h"
 #include "base/lazy_instance.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/native_library.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/process/memory.h"
@@ -45,6 +46,7 @@
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/metrics/chrome_feature_list_creator.h"
 #include "chrome/browser/startup_data.h"
+#include "chrome/common/beijing/render_dll_names.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_constants.h"
@@ -705,6 +707,37 @@ bool IsCanaryDev() {
          channel == version_info::Channel::DEV;
 }
 
+#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && \
+    !defined(OFFICIAL_BUILD)
+void PreloadRenderDllModules() {
+  // Keep one process-lifetime reference to each module. Delayed CIG is applied
+  // later by renderer LowerToken(), after which these unsigned test DLLs
+  // cannot be newly mapped.
+  static base::NativeLibrary libraries[beijing::kRenderDllModuleStemCount] = {};
+  static bool attempted = false;
+  if (attempted) {
+    return;
+  }
+  attempted = true;
+
+  for (size_t i = 0; i < beijing::kRenderDllModuleStemCount; ++i) {
+    const base::FilePath path = beijing::RenderDllPathNextToExeForStem(
+        beijing::kRenderDllModuleStems[i]);
+    if (path.empty()) {
+      LOG(ERROR) << "render_dll preload: DIR_EXE unavailable";
+      continue;
+    }
+
+    base::NativeLibraryLoadError error;
+    libraries[i] = base::LoadNativeLibrary(path, &error);
+    if (!libraries[i]) {
+      LOG(ERROR) << "render_dll preload failed for " << path << ": "
+                 << error.ToString();
+    }
+  }
+}
+#endif
+
 }  // namespace
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1330,6 +1363,14 @@ void ChromeMainDelegate::PreSandboxStartup() {
       command_line.GetSwitchValueASCII(switches::kProcessType);
 
   crash_reporter::InitializeCrashKeys();
+
+#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && \
+    !defined(OFFICIAL_BUILD)
+  if (process_type == switches::kRendererProcess &&
+      command_line.HasSwitch(beijing::kPreloadRenderDllSwitch)) {
+    PreloadRenderDllModules();
+  }
+#endif
 
 #if BUILDFLAG(IS_POSIX)
   ChromeCrashReporterClient::Create();

@@ -1341,6 +1341,14 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
   // Parts are deleted in the reverse order they are added.
   std::vector<std::unique_ptr<ChromeContentBrowserClientParts>> extra_parts_;
 
+#if BUILDFLAG(IS_WIN) && defined(COMPONENT_BUILD) && \
+    !defined(OFFICIAL_BUILD)
+  // Renderer process IDs assigned to chrome://render-dll-test/. These receive
+  // an internal child switch so their test DLLs can be loaded before delayed
+  // CIG is applied, without changing the sandbox policy of other renderers.
+  std::set<int> render_dll_test_process_ids_;
+#endif
+
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   scoped_refptr<safe_browsing::SafeBrowsingService> safe_browsing_service_;
 #endif
