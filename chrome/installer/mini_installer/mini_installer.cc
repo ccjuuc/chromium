@@ -48,6 +48,7 @@
 #include "chrome/installer/mini_installer/appid.h"
 #include "chrome/installer/mini_installer/configuration.h"
 #include "chrome/installer/mini_installer/decompress.h"
+#include "chrome/installer/mini_installer/mini_installer_ui.h"
 #include "chrome/installer/mini_installer/delete_with_retry.h"
 #include "chrome/installer/mini_installer/enumerate_resources.h"
 #include "chrome/installer/mini_installer/memory_range.h"
@@ -204,50 +205,53 @@ ProcessExitResult RunProcessAndWait(const wchar_t* exe_path,
   return ProcessExitResult(exit_code);
 }
 
+namespace {
+
+// Switches consumed by mini_installer UI / silent mode that must not be
+// forwarded to setup.exe.
+bool IsMiniInstallerOnlySwitch(const wchar_t* arg) {
+  if (!arg || !*arg)
+    return false;
+  return ::_wcsicmp(arg, L"--silent") == 0 ||
+         ::_wcsicmp(arg, L"--quiet") == 0 || ::_wcsicmp(arg, L"/S") == 0 ||
+         ::_wcsicmp(arg, L"/s") == 0 ||
+         ::_wcsicmp(arg, L"--product-name") == 0 ||
+         ::_wcsnicmp(arg, L"--product-name=", 15) == 0;
+}
+
+bool AppendCommandLineArgument(CommandString* buffer, const wchar_t* arg) {
+  if (!buffer->append(L" "))
+    return false;
+  const bool needs_quotes =
+      !*arg || ::wcschr(arg, L' ') || ::wcschr(arg, L'\t');
+  if (needs_quotes) {
+    return buffer->append(L"\"") && buffer->append(arg) &&
+           buffer->append(L"\"");
+  }
+  return buffer->append(arg);
+}
+
+}  // namespace
+
 void AppendCommandLineFlags(const wchar_t* command_line,
                             CommandString* buffer) {
-  // The program name (the first argument parsed by CommandLineToArgvW) is
-  // delimited by whitespace or a double quote based on the first character of
-  // the full command line string. Use the same logic here to scan past the
-  // program name in the program's command line (obtained during startup from
-  // GetCommandLine). See
-  // http://www.windowsinspired.com/how-a-windows-programs-splits-its-command-line-into-individual-arguments/
-  // for gory details regarding how CommandLineToArgvW works.
-  wchar_t a_char = 0;
-  if (*command_line == L'"') {
-    // Scan forward past the closing double quote.
-    ++command_line;
-    while (true) {
-      a_char = *command_line;
-      if (!a_char) {
-        break;
-      }
-      ++command_line;
-      if (a_char == L'"') {
-        a_char = *command_line;
-        break;
-      }
-    }  // postcondition: |a_char| contains the character at *command_line.
-  } else {
-    // Scan forward for the first space or tab character.
-    while (true) {
-      a_char = *command_line;
-      if (!a_char || a_char == L' ' || a_char == L'\t') {
-        break;
-      }
-      ++command_line;
-    }  // postcondition: |a_char| contains the character at *command_line.
-  }
-
-  if (!a_char) {
+  // Preserve original quoting by reparsing with CommandLineToArgvW, while
+  // dropping mini_installer-only switches that setup.exe does not understand.
+  int argc = 0;
+  wchar_t** argv = ::CommandLineToArgvW(command_line, &argc);
+  if (!argv)
     return;
+  for (int i = 1; i < argc; ++i) {
+    if (IsMiniInstallerOnlySwitch(argv[i])) {
+      // --product-name <value> consumes the following argument too.
+      if (::_wcsicmp(argv[i], L"--product-name") == 0 && i + 1 < argc)
+        ++i;
+      continue;
+    }
+    if (!AppendCommandLineArgument(buffer, argv[i]))
+      break;
   }
-
-  // Append a space if |command_line| doesn't begin with one.
-  if (a_char != ' ' && a_char != '\t' && !buffer->append(L" ")) {
-    return;
-  }
-  buffer->append(command_line);
+  ::LocalFree(argv);
 }
 
 namespace {
@@ -360,7 +364,8 @@ ProcessExitResult UnpackBinaryResources(HMODULE module,
                                         PathString& setup_path,
                                         PathString& archive_path,
                                         ResourceTypeString& archive_type,
-                                        int& max_delete_attempts) {
+                                        int& max_delete_attempts,
+                                        HWND progress_hwnd) {
   // Generate the setup.exe path where we uncompress setup resource.
   ResourceTypeString setup_type;
   PathString setup_name;
@@ -412,6 +417,7 @@ ProcessExitResult UnpackBinaryResources(HMODULE module,
   }
 
   // Write the archive to disk.
+  PostInstallerUiProgress(progress_hwnd, 18, kInstallerUiStageExtractArchive);
   if (!archive_path.assign(base_path) ||
       !archive_path.append(archive_name.get())) {
     return ProcessExitResult(PATH_STRING_OVERFLOW);
@@ -422,6 +428,7 @@ ProcessExitResult UnpackBinaryResources(HMODULE module,
   }
 
   // Extract directly to "setup.exe" if the resource is not compressed.
+  PostInstallerUiProgress(progress_hwnd, 30, kInstallerUiStageExtractSetup);
   if (!setup_path.assign(base_path) ||
       !setup_path.append(setup_type.compare(kBinResourceType) == 0
                              ? kSetupExe
@@ -442,6 +449,7 @@ ProcessExitResult UnpackBinaryResources(HMODULE module,
         !setup_dest_path.append(kSetupExe)) {
       return ProcessExitResult(PATH_STRING_OVERFLOW);
     }
+    PostInstallerUiProgress(progress_hwnd, 36, kInstallerUiStageExtractSetup);
     bool success =
         mini_installer::Expand(setup_path.get(), setup_dest_path.get());
     DeleteWithRetryAndMetrics(setup_path.get(), max_delete_attempts);
@@ -465,11 +473,52 @@ ProcessExitResult UnpackBinaryResources(HMODULE module,
   return exit_code;
 }
 
+bool WriteInstallerPreferences(const wchar_t* base_path,
+                               const InstallerUiOptions& options,
+                               PathString* preferences_path) {
+  if (!preferences_path->assign(base_path) ||
+      !preferences_path->append(L"installer_options.json")) {
+    return false;
+  }
+
+  HANDLE file =
+      ::CreateFileW(preferences_path->get(), GENERIC_WRITE, 0, nullptr,
+                    CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+  if (file == INVALID_HANDLE_VALUE)
+    return false;
+
+  // Always ask setup not to auto-launch. Interactive UI launches only after
+  // a confirmed successful install (and only if the user opted in).
+  const char* parts[] = {
+      "{\"distribution\":{\"do_not_create_desktop_shortcut\":",
+      options.create_desktop_shortcut ? "false" : "true",
+      ",\"do_not_launch_chrome\":true",
+      ",\"make_chrome_default_for_user\":",
+      options.make_default_browser ? "true" : "false", "}}"};
+  bool success = true;
+  for (const char* part : parts) {
+    const DWORD size = static_cast<DWORD>(::lstrlenA(part));
+    DWORD written = 0;
+    if (!::WriteFile(file, part, size, &written, nullptr) || written != size) {
+      success = false;
+      break;
+    }
+  }
+  ::CloseHandle(file);
+  if (!success) {
+    ::DeleteFileW(preferences_path->get());
+    preferences_path->clear();
+  }
+  return success;
+}
+
 // Executes setup.exe, waits for it to finish and returns the exit code.
 ProcessExitResult RunSetup(const Configuration& configuration,
                            const wchar_t* archive_path,
                            const wchar_t* setup_path,
-                           bool compressed_archive) {
+                           bool compressed_archive,
+                           const InstallerUiOptions& options,
+                           const wchar_t* preferences_path) {
   // Get the path to setup.exe.
   PathString setup_exe;
   if (!setup_exe.assign(setup_path)) {
@@ -498,6 +547,26 @@ ProcessExitResult RunSetup(const Configuration& configuration,
   // Get any command line option specified for mini_installer and pass them
   // on to setup.exe
   AppendCommandLineFlags(configuration.command_line(), &cmd_line);
+
+  if (options.apply_options) {
+    if (!cmd_line.append(L" --install-directory=\"") ||
+        !cmd_line.append(options.install_path) || !cmd_line.append(L"\"")) {
+      return ProcessExitResult(COMMAND_STRING_OVERFLOW);
+    }
+    if (options.system_level && !configuration.is_system_level() &&
+        !cmd_line.append(L" --system-level")) {
+      return ProcessExitResult(COMMAND_STRING_OVERFLOW);
+    }
+    // Ensure setup never auto-launches; the UI owns post-success launch.
+    if (!cmd_line.append(L" --do-not-launch-chrome")) {
+      return ProcessExitResult(COMMAND_STRING_OVERFLOW);
+    }
+    if (preferences_path && *preferences_path &&
+        (!cmd_line.append(L" --installerdata=\"") ||
+         !cmd_line.append(preferences_path) || !cmd_line.append(L"\""))) {
+      return ProcessExitResult(COMMAND_STRING_OVERFLOW);
+    }
+  }
 
   return RunProcessAndWait(setup_exe.get(), cmd_line.get(),
                            RUN_SETUP_FAILED_FILE_NOT_FOUND,
@@ -709,6 +778,58 @@ bool GetWorkDir(HMODULE module,
          CreateWorkDir(base_path.get(), work_dir, exit_code);
 }
 
+namespace {
+
+struct InstallWorkContext {
+  HMODULE module;
+  const Configuration* configuration;
+  InstallerUiOptions* ui_options;
+  PathString* base_path;
+  PathString* setup_path;
+  PathString* archive_path;
+  ResourceTypeString* archive_type;
+  PathString* preferences_path;
+  int* max_delete_attempts;
+};
+
+ProcessExitResult InstallWork(void* opaque, HWND progress_hwnd) {
+  auto* ctx = static_cast<InstallWorkContext*>(opaque);
+  ProcessExitResult exit_code = ProcessExitResult(SUCCESS_EXIT_CODE);
+
+  PostInstallerUiProgress(progress_hwnd, 8, kInstallerUiStageExtractArchive);
+  if (!GetWorkDir(ctx->module, ctx->base_path, &exit_code))
+    return exit_code;
+
+  exit_code = UnpackBinaryResources(
+      ctx->module, ctx->base_path->get(), *ctx->setup_path, *ctx->archive_path,
+      *ctx->archive_type, *ctx->max_delete_attempts, progress_hwnd);
+  if (!exit_code.IsSuccess())
+    return exit_code;
+
+  // While unpacking the binaries, we paged in a whole bunch of memory that
+  // we don't need anymore.  Let's give it back to the pool before running
+  // setup.
+  ::SetProcessWorkingSetSize(::GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
+
+  PostInstallerUiProgress(progress_hwnd, 42, kInstallerUiStageInstall);
+  if (ctx->ui_options->apply_options &&
+      !WriteInstallerPreferences(ctx->base_path->get(), *ctx->ui_options,
+                                 ctx->preferences_path)) {
+    return ProcessExitResult(GENERIC_INITIALIZATION_FAILURE, ::GetLastError());
+  }
+
+  PostInstallerUiProgress(progress_hwnd, 50, kInstallerUiStageInstall);
+  exit_code = RunSetup(
+      *ctx->configuration, ctx->archive_path->get(), ctx->setup_path->get(),
+      ctx->archive_type->compare(kLZMAResourceType) == 0, *ctx->ui_options,
+      ctx->preferences_path->get());
+  if (exit_code.IsSuccess())
+    PostInstallerUiProgress(progress_hwnd, 100, kInstallerUiStageFinishing);
+  return exit_code;
+}
+
+}  // namespace
+
 ProcessExitResult WMain(HMODULE module) {
   ProcessExitResult exit_code = ProcessExitResult(SUCCESS_EXIT_CODE);
 
@@ -724,29 +845,33 @@ ProcessExitResult WMain(HMODULE module) {
     return ProcessExitResult(INVALID_OPTION);
   }
 
-  // First get a path where we can extract payload
   PathString base_path;
-  if (!GetWorkDir(module, &base_path, &exit_code)) {
-    return exit_code;
-  }
-
   int max_delete_attempts = 0;
   PathString setup_path;
   PathString archive_path;
   ResourceTypeString archive_type;
+  PathString preferences_path;
+  InstallerUiOptions ui_options;
 
-  exit_code =
-      UnpackBinaryResources(module, base_path.get(), setup_path, archive_path,
-                            archive_type, max_delete_attempts);
+  InstallWorkContext install_ctx = {
+      module,         &configuration, &ui_options,     &base_path,
+      &setup_path,    &archive_path,  &archive_type,   &preferences_path,
+      &max_delete_attempts};
 
-  // While unpacking the binaries, we paged in a whole bunch of memory that
-  // we don't need anymore.  Let's give it back to the pool before running
-  // setup.
-  ::SetProcessWorkingSetSize(::GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
+  // Interactive UI stays open through unpack + setup, then shows Finish.
+  // Silent/quiet installs skip the UI and reuse the last install path.
+  if (ShouldShowInstallerUi(configuration)) {
+    exit_code = RunWithInstallerUi(module, configuration, &ui_options,
+                                   &InstallWork, &install_ctx);
+  } else {
+    if (!PrepareSilentInstallerOptions(configuration, &ui_options)) {
+      return ProcessExitResult(GENERIC_INITIALIZATION_FAILURE);
+    }
+    exit_code = InstallWork(&install_ctx, nullptr);
+  }
 
-  if (exit_code.IsSuccess()) {
-    exit_code = RunSetup(configuration, archive_path.get(), setup_path.get(),
-                         archive_type.compare(kLZMAResourceType) == 0);
+  if (!preferences_path.empty()) {
+    DeleteWithRetryAndMetrics(preferences_path.get(), max_delete_attempts);
   }
 
   if (configuration.should_delete_extracted_files()) {

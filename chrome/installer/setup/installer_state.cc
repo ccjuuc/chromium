@@ -37,6 +37,34 @@ bool GetMasterPreference(const InitialPreferences& prefs,
   return prefs.GetBool(pref_name, &value) ? value : default_value;
 }
 
+// Custom install locations are intentionally limited to non-root directories
+// on fixed local drives. In particular, do not install executable files below
+// the Windows directory or onto removable/network storage.
+bool IsValidCustomInstallPath(const base::FilePath& path) {
+  const std::wstring& value = path.value();
+  if (value.size() <= 3 || !path.IsAbsolute() || path.ReferencesParent() ||
+      value[1] != L':' || !base::FilePath::IsSeparator(value[2])) {
+    return false;
+  }
+
+  const wchar_t drive_root[] = {value[0], L':', L'\\', L'\0'};
+  if (::GetDriveTypeW(drive_root) != DRIVE_FIXED ||
+      (base::PathExists(path) && !base::DirectoryExists(path))) {
+    return false;
+  }
+
+  wchar_t windows_buffer[MAX_PATH] = {};
+  const UINT windows_length =
+      ::GetWindowsDirectoryW(windows_buffer, std::size(windows_buffer));
+  if (windows_length == 0 || windows_length >= std::size(windows_buffer)) {
+    return false;
+  }
+  const base::FilePath windows_path(windows_buffer);
+  return !base::FilePath::CompareEqualIgnoreCase(path.value(),
+                                                  windows_path.value()) &&
+         !windows_path.IsParent(path);
+}
+
 }  // namespace
 
 InstallerState::InstallerState()
@@ -81,6 +109,19 @@ void InstallerState::Initialize(const base::CommandLine& command_line,
   const bool is_uninstall = command_line.HasSwitch(switches::kUninstall);
 
   target_path_ = GetChromeInstallPathWithPrefs(system_install(), prefs);
+  if (command_line.HasSwitch(switches::kInstallDirectory) &&
+      GetInstalledDirectory(system_install()).empty()) {
+    base::FilePath custom_path =
+        command_line.GetSwitchValuePath(switches::kInstallDirectory)
+            .StripTrailingSeparators();
+    if (IsValidCustomInstallPath(custom_path)) {
+      target_path_ = std::move(custom_path);
+    } else {
+      LOG(ERROR) << "Invalid custom install directory: "
+                 << custom_path.value();
+      target_path_.clear();
+    }
+  }
 
   state_key_ = install_static::GetClientStateKeyPath();
 

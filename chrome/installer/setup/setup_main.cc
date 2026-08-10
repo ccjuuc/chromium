@@ -522,12 +522,14 @@ installer::InstallStatus RenameChromeExecutables(
 // desired operation.
 // Also blocks simultaneous user-level and system-level installs.  In the case
 // of trying to install user-level Chrome when system-level exists, the
-// existing system-level Chrome is launched.
+// existing system-level Chrome is launched unless --do-not-launch-chrome /
+// distribution.do_not_launch_chrome is set (interactive installers own launch).
 // When the pre-install conditions are not satisfied, the result is written to
 // the registry (via WriteInstallerResult), |status| is set appropriately, and
 // false is returned.
 bool CheckPreInstallConditions(const InstallationState& original_state,
                                const InstallerState& installer_state,
+                               const InitialPreferences& prefs,
                                installer::InstallStatus* status) {
   if (!installer_state.system_install()) {
     // This is a user-level installation. Make sure that we are not installing
@@ -562,13 +564,22 @@ bool CheckPreInstallConditions(const InstallationState& original_state,
                                              nullptr);
       } else {
         *status = installer::EXISTING_VERSION_LAUNCHED;
-        base::FilePath chrome_exe = install_path.Append(installer::kChromeExe);
-        base::CommandLine cmd(chrome_exe);
-        cmd.AppendSwitch(switches::kForceFirstRun);
         installer_state.WriteInstallerResult(
             *status, IDS_INSTALL_EXISTING_VERSION_LAUNCHED_BASE, nullptr);
-        VLOG(1) << "Launching existing system-level chrome instead.";
-        base::LaunchProcess(cmd, base::LaunchOptions());
+        bool do_not_launch_chrome = false;
+        prefs.GetBool(installer::initial_preferences::kDoNotLaunchChrome,
+                      &do_not_launch_chrome);
+        if (!do_not_launch_chrome) {
+          base::FilePath chrome_exe =
+              install_path.Append(installer::kChromeExe);
+          base::CommandLine cmd(chrome_exe);
+          cmd.AppendSwitch(switches::kForceFirstRun);
+          VLOG(1) << "Launching existing system-level chrome instead.";
+          base::LaunchProcess(cmd, base::LaunchOptions());
+        } else {
+          VLOG(1) << "Skipping launch of existing system-level chrome "
+                     "(do_not_launch_chrome).";
+        }
       }
       return false;
     }
@@ -682,7 +693,7 @@ installer::InstallStatus InstallProducts(InstallationState& original_state,
   const bool entered_background_mode = installer::AdjustThreadPriority();
   VLOG_IF(1, entered_background_mode) << "Entered background processing mode.";
 
-  if (CheckPreInstallConditions(original_state, *installer_state,
+  if (CheckPreInstallConditions(original_state, *installer_state, prefs,
                                 &install_status)) {
     VLOG(1) << "Installing to " << installer_state->target_path().value();
     install_status = InstallProductsHelper(original_state, setup_exe, cmd_line,
@@ -1416,6 +1427,10 @@ int SetupMain() {
 
   InstallerState installer_state;
   installer_state.Initialize(cmd_line, prefs, original_state);
+  if (installer_state.target_path().empty()) {
+    LOG(ERROR) << "No valid installation directory was provided.";
+    return installer::UNSUPPORTED_OPTION;
+  }
 
   persistent_histogram_storage.set_storage_base_dir(
       installer_state.target_path());

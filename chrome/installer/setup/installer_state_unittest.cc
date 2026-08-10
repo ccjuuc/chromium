@@ -107,6 +107,47 @@ TEST_F(InstallerStateTest, WithProduct) {
   }
 }
 
+TEST_F(InstallerStateTest, CustomInstallDirectory) {
+  RegistryOverrideManager override_manager;
+  ASSERT_NO_FATAL_FAILURE(
+      override_manager.OverrideRegistry(HKEY_CURRENT_USER));
+  ASSERT_NO_FATAL_FAILURE(
+      override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE));
+
+  const base::FilePath custom_path(L"C:\\XenonInstallerTest");
+  base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);
+  cmd_line.SetProgram(base::FilePath(L"setup.exe"));
+  cmd_line.AppendSwitchPath(installer::switches::kInstallDirectory,
+                            custom_path);
+  InitialPreferences prefs(cmd_line);
+  InstallationState machine_state;
+  machine_state.Initialize();
+
+  InstallerState installer_state;
+  installer_state.Initialize(cmd_line, prefs, machine_state);
+  EXPECT_EQ(custom_path, installer_state.target_path());
+}
+
+TEST_F(InstallerStateTest, RejectsInvalidCustomInstallDirectory) {
+  RegistryOverrideManager override_manager;
+  ASSERT_NO_FATAL_FAILURE(
+      override_manager.OverrideRegistry(HKEY_CURRENT_USER));
+  ASSERT_NO_FATAL_FAILURE(
+      override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE));
+
+  base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);
+  cmd_line.SetProgram(base::FilePath(L"setup.exe"));
+  cmd_line.AppendSwitchPath(installer::switches::kInstallDirectory,
+                            base::FilePath(L"C:\\"));
+  InitialPreferences prefs(cmd_line);
+  InstallationState machine_state;
+  machine_state.Initialize();
+
+  InstallerState installer_state;
+  installer_state.Initialize(cmd_line, prefs, machine_state);
+  EXPECT_TRUE(installer_state.target_path().empty());
+}
+
 TEST_F(InstallerStateTest, InstallerResult) {
   const bool system_level = true;
   HKEY root = system_level ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;

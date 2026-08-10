@@ -74,7 +74,8 @@ ProcessExitResult UnpackBinaryResources(HMODULE module,
                                         PathString& setup_path,
                                         PathString& archive_path,
                                         ResourceTypeString& archive_type,
-                                        int& max_delete_attempts);
+                                        int& max_delete_attempts,
+                                        HWND progress_hwnd = nullptr);
 
 // Main function for Chrome's mini_installer. First gets a working dir, unpacks
 // the resources, and finally executes setup.exe to do the install/update. Also

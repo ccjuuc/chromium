@@ -1,0 +1,114 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+assert(is_win)
+
+config("duilib_config") {
+  include_dirs = [ "DuiLib" ]
+  defines = [
+    "UILIB_STATIC",
+    "UNICODE",
+    "_UNICODE",
+  ]
+}
+
+# Applied publicly so dependents that include UIlib.h also get these.
+config("duilib_warnings") {
+  cflags = [
+    "/WX-",
+    "/vmg",
+  ]
+  if (is_clang) {
+    cflags += [
+      "-fms-extensions",
+      # Vendored DuiLib is noisy under Chromium clang; keep build signal elsewhere.
+      "-w",
+      "-Wno-error",
+      # C++17 removed 'register'; still used in unzip.cpp.
+      "-Wno-register",
+      "-Wno-error=register",
+      "-Wno-deprecated-register",
+    ]
+  }
+}
+
+static_library("duilib") {
+  sources = [
+    "DuiLib/Control/UIActiveX.cpp",
+    "DuiLib/Control/UIAnimation.cpp",
+    "DuiLib/Control/UIButton.cpp",
+    "DuiLib/Control/UIColorPalette.cpp",
+    "DuiLib/Control/UICombo.cpp",
+    "DuiLib/Control/UIComboBox.cpp",
+    "DuiLib/Control/UIDateTime.cpp",
+    "DuiLib/Control/UIEdit.cpp",
+    "DuiLib/Control/UIFadeButton.cpp",
+    "DuiLib/Control/UIFlash.cpp",
+    "DuiLib/Control/UIGifAnim.cpp",
+    "DuiLib/Control/UIGifAnimEx.cpp",
+    "DuiLib/Control/UIGroupBox.cpp",
+    "DuiLib/Control/UIHotKey.cpp",
+    "DuiLib/Control/UIIPAddress.cpp",
+    "DuiLib/Control/UIIPAddressEx.cpp",
+    "DuiLib/Control/UILabel.cpp",
+    "DuiLib/Control/UIList.cpp",
+    "DuiLib/Control/UIListEx.cpp",
+    "DuiLib/Control/UILoading.cpp",
+    "DuiLib/Control/UIMenu.cpp",
+    "DuiLib/Control/UIOption.cpp",
+    "DuiLib/Control/UIPageControl.cpp",
+    "DuiLib/Control/UIProgress.cpp",
+    "DuiLib/Control/UIRichEdit.cpp",
+    "DuiLib/Control/UIRing.cpp",
+    "DuiLib/Control/UIRollText.cpp",
+    "DuiLib/Control/UIScrollBar.cpp",
+    "DuiLib/Control/UISlider.cpp",
+    "DuiLib/Control/UIText.cpp",
+    "DuiLib/Control/UITreeView.cpp",
+    "DuiLib/Control/UIWebBrowser.cpp",
+    "DuiLib/Core/ControlFactory.cpp",
+    "DuiLib/Core/UIBase.cpp",
+    "DuiLib/Core/UIContainer.cpp",
+    "DuiLib/Core/UIControl.cpp",
+    "DuiLib/Core/UIDlgBuilder.cpp",
+    "DuiLib/Core/UIManager.cpp",
+    "DuiLib/Core/UIMarkup.cpp",
+    "DuiLib/Core/UIRender.cpp",
+    "DuiLib/Core/UIResourceManager.cpp",
+    "DuiLib/Layout/UIAnimationTabLayout.cpp",
+    "DuiLib/Layout/UIChildLayout.cpp",
+    "DuiLib/Layout/UIHorizontalLayout.cpp",
+    "DuiLib/Layout/UITabLayout.cpp",
+    "DuiLib/Layout/UITileLayout.cpp",
+    "DuiLib/Layout/UIVerticalLayout.cpp",
+    "DuiLib/UILib.cpp",
+    "DuiLib/Utils/DPI.cpp",
+    "DuiLib/Utils/DragDropImpl.cpp",
+    "DuiLib/Utils/TrayIcon.cpp",
+    "DuiLib/Utils/UIDelegate.cpp",
+    "DuiLib/Utils/UIShadow.cpp",
+    "DuiLib/Utils/unzip.cpp",
+    "DuiLib/Utils/Utils.cpp",
+    "DuiLib/Utils/WinImplBase.cpp",
+  ]
+
+  public_configs = [
+    ":duilib_config",
+    ":duilib_warnings",
+  ]
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [ "//build/config/compiler:no_chromium_code" ]
+
+  libs = [
+    "comctl32.lib",
+    "gdiplus.lib",
+    "imm32.lib",
+    "ole32.lib",
+    "oleaut32.lib",
+    "uuid.lib",
+    "winmm.lib",
+    "ws2_32.lib",
+  ]
+}
+

@@ -81,6 +81,9 @@ const char kForceUninstall[] = "force-uninstall";
 // is used.
 const char kInstallArchive[] = "install-archive";
 
+// Specify the target directory for a fresh install.
+const char kInstallDirectory[] = "install-directory";
+
 // Use the given uncompressed chrome.7z archive as the source of files to
 // install.
 const char kUncompressedArchive[] = "uncompressed-archive";

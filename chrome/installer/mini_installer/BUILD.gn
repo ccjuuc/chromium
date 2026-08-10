@@ -33,6 +33,11 @@ declare_args() {
   # possible. This must be ignored for debug builds and is only intended to
   # allow developers to test the uncompressed installer locally.
   enable_uncompressed_archive = false
+
+  # Show a DuiLib splash window as soon as mini_installer launches (before
+  # unpacking setup.exe / chrome.7z). Requires linking the CRT and DuiLib.
+  # Silent installs (--silent/--quiet) still skip the UI.
+  enable_mini_installer_duilib_ui = true
 }
 
 config("mini_installer_compiler_flags") {
@@ -71,6 +76,19 @@ source_set("lib") {
   ]
 
   deps = [ "//build:branding_buildflags" ]
+
+  if (enable_mini_installer_duilib_ui) {
+    sources += [
+      "mini_installer_ui.cc",
+      "mini_installer_ui.h",
+    ]
+    deps += [ "//third_party/duilib" ]
+    defines = [ "MINI_INSTALLER_HAS_DUILIB_UI=1" ] +
+              chrome_custom_names_defines +
+              chrome_custom_install_identity_defines
+    configs -= [ "//build/config/compiler:chromium_code" ]
+    configs += [ "//build/config/compiler:no_chromium_code" ]
+  }
 
   # Initialization may insert unexpected memset calls.
   configs -= [ "//build/config/compiler:default_init_stack_vars" ]
@@ -260,6 +278,10 @@ source_set("mini_installer_sources") {
   configs -= [ "//build/config/compiler:default_init_stack_vars" ]
   configs += [ ":mini_installer_compiler_flags" ]
 
+  if (enable_mini_installer_duilib_ui) {
+    defines = [ "MINI_INSTALLER_HAS_DUILIB_UI=1" ]
+  }
+
   # Because it changes the stack protector.
   use_libcxx_modules = false
 }
@@ -294,6 +316,10 @@ template("generate_mini_installer") {
     ]
 
     libs = [ "setupapi.lib" ]
+    if (enable_mini_installer_duilib_ui) {
+      # Product display name is read from VERSIONINFO at runtime.
+      libs += [ "version.lib" ]
+    }
 
     deps = [
       ":copy_signing",
@@ -315,10 +341,9 @@ template("generate_mini_installer") {
     # The net result is similar to linking with /NODEFAULTLIB, but more precise
     # as it just excludes the CRT.
     #
-    # But in asan and clang profiling builds we need to link against a runtime
-    # library, which in turn depends on the standard library and relies on it
-    # to run initializers.
-    if (!is_asan && !use_clang_profiling) {
+    # But in asan, clang profiling, and DuiLib-UI builds we need to link against
+    # a runtime library / CRT (DuiLib requires it).
+    if (!is_asan && !use_clang_profiling && !enable_mini_installer_duilib_ui) {
       no_default_deps = true
       ldflags += [ "/ENTRY:MainEntryPoint" ]
     }

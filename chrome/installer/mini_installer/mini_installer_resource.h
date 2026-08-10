@@ -17,6 +17,9 @@
 // installers.
 #define ID_PREVIOUS_VERSION 1
 
+// DuiLib splash skin zip (see duilib_skin.zip).
+#define IDR_DUILIB_SKIN 128
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED

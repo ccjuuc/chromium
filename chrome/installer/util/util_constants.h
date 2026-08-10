@@ -176,6 +176,9 @@ inline constexpr char kEnableSystemTracing[] = "enable-system-tracing";
 extern const char kForceConfigureUserSettings[];
 extern const char kForceUninstall[];
 extern const char kInstallArchive[];
+// Overrides the target directory for a fresh installation. Existing
+// installations always keep the directory recorded in the uninstall registry.
+extern const char kInstallDirectory[];
 extern const char kInstallerData[];
 extern const char kInstallLevel[];
 extern const char kLogFile[];

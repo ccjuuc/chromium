@@ -55,8 +55,11 @@ TEST(MiniInstallerTest, AppendCommandLineFlags) {
        L"foo.exe --verbose-logging"},
       {L"\"C:\\Temp\\mini_installer (1).exe\" --verbose-logging",
        L"foo.exe --verbose-logging"},
-      {L"\"mini_installer.exe\"--verbose-logging",
+      // mini_installer-only switches are not forwarded to setup.exe.
+      {L"mini_installer.exe --silent --verbose-logging",
        L"foo.exe --verbose-logging"},
+      {L"mini_installer.exe --quiet /S --system-level",
+       L"foo.exe --system-level"},
   };
 
   CommandString buffer;

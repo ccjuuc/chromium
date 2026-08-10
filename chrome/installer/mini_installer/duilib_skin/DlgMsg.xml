@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<Window size="476,304" caption="28,28,0,68" bktrans="true">
+    <Font name="Microsoft YaHei" size="14" bold="true" italic="false" />
+    <Font name="Microsoft YaHei" size="12" bold="false" italic="false" />
+    <Font name="Microsoft YaHei" size="11" bold="false" italic="false" />
+    <!-- outer 28 = panel.png shadow padding; inner 20 = content margin on white card -->
+    <VerticalLayout bkimage="file='panel.png' corner='46,46,46,46'" inset="28,28,28,28">
+        <VerticalLayout inset="20,12,20,20">
+            <HorizontalLayout height="32">
+                <Label name="msgtitle" text="提示" height="22" textcolor="#FF222222" font="0" valign="center" />
+                <Control />
+                <Button name="msgclose" tooltip="Close" width="32" height="32" align="center" valign="center" normalimage="file='sys_close.png' source='0,0,32,32'" hotimage="file='sys_close.png' source='32,0,64,32'" pushedimage="file='sys_close.png' source='64,0,96,32'" />
+            </HorizontalLayout>
+            <Control height="8" />
+            <Label name="msgbody" text="" align="left" valign="top" height="120" textcolor="#FF444444" font="1" />
+            <Control height="*" />
+            <HorizontalLayout height="40">
+                <Control />
+                <Button name="msgno" text="取消" visible="false" width="100" height="36" font="1" textcolor="#FF555555" align="center" valign="center" bordercolor="#FFD0D5DD" bordersize="1" borderround="8,8" bkcolor="#FFFFFFFF" hotbkcolor="#FFF7F8FA" pushedbkcolor="#FFEEF0F3" />
+                <Control name="msgbtnspace" width="16" visible="false" />
+                <Button name="msgyes" text="确定" width="100" height="36" font="1" textcolor="#FF5B6CFF" align="center" valign="center" bordercolor="#FF8FA0FF" bordersize="1" borderround="8,8" bkcolor="#FFFFFFFF" hotbkcolor="#FFF5F7FF" pushedbkcolor="#FFECEFFF" />
+                <Button name="msgok" text="知道了" visible="false" width="120" height="36" font="1" textcolor="#FF5B6CFF" align="center" valign="center" bordercolor="#FF8FA0FF" bordersize="1" borderround="8,8" bkcolor="#FFFFFFFF" hotbkcolor="#FFF5F7FF" pushedbkcolor="#FFECEFFF" />
+                <Control />
+            </HorizontalLayout>
+        </VerticalLayout>
+    </VerticalLayout>
+</Window>
