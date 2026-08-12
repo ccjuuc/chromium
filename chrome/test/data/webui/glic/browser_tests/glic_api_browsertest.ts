@@ -1,10 +1,10 @@
 // Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-import {HostCapability, InvocationSource, MetricUserInputReactionType, PanelStateKind, Platform, ResponseStopCause, WebClientMode} from '/glic/glic_api/glic_api.js';
-import type {CancelActionsResult, FocusedTabData, OpenPanelInfo, PanelOpeningData, TabData, UserProfileInfo} from '/glic/glic_api/glic_api.js';
+import {HostCapability, MetricUserInputReactionType, PanelStateKind, Platform, ResponseStopCause, WebClientMode} from '/glic/glic_api/glic_api.js';
+import type {CancelActionsResult, FocusedTabData, TabData, UserProfileInfo} from '/glic/glic_api/glic_api.js';
 
-import {ApiTestFixtureBase, assertDefined, assertEquals, assertFalse, assertNotEquals, assertRejects, assertTrue, assertUndefined, checkDefined, mapObservable, observeSequence, readStream, runUntil, sleep, testMain, waitFor, WebClient} from './browser_test_base.js';
+import {ApiTestFixtureBase, assertDefined, assertEquals, assertFalse, assertNotEquals, assertRejects, assertTrue, assertUndefined, checkDefined, mapObservable, observeSequence, readStream, runUntil, sleep, testMain, waitFor} from './browser_test_base.js';
 import type {SequencedSubscriber} from './browser_test_base.js';
 
 // Test cases here correspond to test cases in glic_api_browsertest.cc.
@@ -38,32 +38,8 @@ class ApiTests extends ApiTestFixtureBase {
 
   async testHibernateAllOnMemoryPressure() {}
 
-  async testGeminiEnterpriseSettings() {
-    assertDefined(this.host.getGeminiEnterpriseSettings);
-    const settingsObservable = this.host.getGeminiEnterpriseSettings();
-    const settings = settingsObservable.getCurrentValue();
-    assertDefined(settings);
-    assertEquals(settings.projectId, 'switch-project');
-    assertEquals(settings.appId, 'switch-engine');
-    assertEquals(settings.location, 'switch-location');
-  }
 
-  async testGeminiEnterpriseSettingsPolicy() {
-    assertDefined(this.host.getGeminiEnterpriseSettings);
-    const settingsObservable = this.host.getGeminiEnterpriseSettings();
-    const settings = settingsObservable.getCurrentValue();
-    assertDefined(settings);
-    assertEquals(settings.projectId, 'policy-project');
-    assertEquals(settings.appId, 'policy-engine');
-    assertEquals(settings.location, 'policy-location');
-  }
 
-  async testGeminiEnterpriseSettingsDisabled() {
-    assertDefined(this.host.getGeminiEnterpriseSettings);
-    const settingsObservable = this.host.getGeminiEnterpriseSettings();
-    const settings = settingsObservable.getCurrentValue();
-    assertUndefined(settings);
-  }
 
   async testCancelActions() {
     assertDefined(this.host.cancelActions);
@@ -72,14 +48,6 @@ class ApiTests extends ApiTestFixtureBase {
     await this.advanceToNextStep(result);
   }
 
-  async testDoNothing() {}
-
-  async testDefaultInvocationSource() {
-    const panelOpenData =
-        checkDefined(this.client.panelOpenData.getCurrentValue());
-    assertEquals(
-        panelOpenData.invocationSource, InvocationSource.TOP_CHROME_BUTTON);
-  }
 
   async testErrorShownOnMojoPipeError() {}
 
@@ -87,20 +55,6 @@ class ApiTests extends ApiTestFixtureBase {
     await this.advanceToNextStep();
     await this.advanceToNextStep();
   }
-
-  async testIsBrowserOpen() {
-    assertDefined(this.host.isBrowserOpen);
-    // This test closes the browser, so we need to detach the side panel to
-    // avoid closing glic.
-    await this.detachIfInMultiInstance();
-    const isBrowserOpen = observeSequence(this.host.isBrowserOpen());
-    assertTrue(await isBrowserOpen.next());
-    // Close the browser.
-    await this.advanceToNextStep();
-    assertTrue(!await isBrowserOpen.next());
-  }
-
-
 
   async testIsOnboardingCompleted() {
     assertDefined(this.host.isOnboardingCompleted);
@@ -265,17 +219,6 @@ class ApiTests extends ApiTestFixtureBase {
       assertTrue(
           sequence.isEmpty(), '#3: Spurious updates after a new tab opened');
     }
-  }
-
-  async testGetFocusedTabStateV2BrowserClosed() {
-    assertDefined(this.host.getFocusedTabStateV2);
-    const sequence =
-        observeSequence<FocusedTabData>(this.host.getFocusedTabStateV2());
-    // Ignore the initial focus.
-    await sequence.next();
-    const focus = await sequence.next();
-    assertFalse(!!focus.hasFocus);
-    assertDefined(focus.hasNoFocus);
   }
 
   async testGetContextFromFocusedTabWithoutPermission() {
@@ -558,16 +501,6 @@ class ApiTests extends ApiTestFixtureBase {
     metrics.onClosedCaptionsShown();
   }
 
-  async testSetSyntheticExperimentState() {
-    assertDefined(this.host.setSyntheticExperimentState);
-    this.host.setSyntheticExperimentState('TestTrial', 'Enabled');
-  }
-
-  async testSetSyntheticExperimentStateMultiProfile() {
-    assertDefined(this.host.setSyntheticExperimentState);
-    this.host.setSyntheticExperimentState('TestTrial', 'Group1');
-    this.host.setSyntheticExperimentState('TestTrial', 'Group2');
-  }
 
 
   async testOpenOsMediaPermissionSettings() {
@@ -588,27 +521,6 @@ class ApiTests extends ApiTestFixtureBase {
   async testGetOsMicrophonePermissionStatusNotAllowed() {
     assertDefined(this.host.getOsMicrophonePermissionStatus);
     assertFalse(await this.host.getOsMicrophonePermissionStatus());
-  }
-
-  // Test navigating successfully after client connection.
-  async testNavigateToDifferentClientPage() {
-    // This test function is run twice.
-    const runCount: number = this.testParams;
-
-    const url = new URL(window.location.href);
-    // First time:
-    if (runCount === 0) {
-      url.searchParams.set('foobar', '1');
-      (async () => {
-        await sleep(100);
-        location.href = url.toString();
-      })();
-      return;
-    }
-
-    // Second time:
-    assertEquals(runCount, 1);
-    assertEquals(url.searchParams.get('foobar'), '1');
   }
 
   // Test navigating unsuccessfully after client connection.
@@ -1164,40 +1076,6 @@ class ApiTests extends ApiTestFixtureBase {
     }
   }
 
-  async testJournal() {
-    assertDefined(this.host.getJournalHost);
-    const journalHost = this.host.getJournalHost();
-    assertDefined(journalHost);
-    journalHost.start(64 * 1024 * 1024, true);
-    let snapshot = await journalHost.snapshot(false);
-    let lastJournalSize = snapshot.data.byteLength;
-    assertTrue(lastJournalSize > 0);
-    journalHost.instantEvent(23, 'instant_event', 'some_details');
-    snapshot = await journalHost.snapshot(false);
-    assertTrue(snapshot.data.byteLength > lastJournalSize);
-    lastJournalSize = snapshot.data.byteLength;
-    journalHost.clear();
-    snapshot = await journalHost.snapshot(false);
-    assertTrue(snapshot.data.byteLength < lastJournalSize);
-    lastJournalSize = snapshot.data.byteLength;
-    journalHost.beginAsyncEvent(10, 23, 'async_event', 'some_details');
-    journalHost.endAsyncEvent(10, 'some_details_end');
-    snapshot = await journalHost.snapshot(false);
-    assertTrue(snapshot.data.byteLength > lastJournalSize);
-    lastJournalSize = snapshot.data.byteLength;
-    journalHost.stop();
-  }
-
-  async testStopMicrophone() {
-    const stopMicrophonePromise = Promise.withResolvers<void>();
-    this.client.onStopMicrophone = () => {
-      stopMicrophonePromise.resolve();
-    };
-
-    await this.advanceToNextStep();
-    await waitFor(stopMicrophonePromise.promise);
-  }
-
   async testGetHostCapabilities() {
     assertDefined(this.host.getHostCapabilities);
     const capabilities: Set<HostCapability> =
@@ -1222,14 +1100,6 @@ class ApiTests extends ApiTestFixtureBase {
     assertDefined(clientId);
   }
 
-  async testGetModelQualityClientIdFeatureDisabled() {
-    assertDefined(this.host.getHostCapabilities);
-    const capabilities: Set<HostCapability> =
-        await this.host.getHostCapabilities();
-    assertFalse(capabilities.has(HostCapability.GET_MODEL_QUALITY_CLIENT_ID));
-
-    assertUndefined(this.host.getModelQualityClientId);
-  }
 
   async testAdditionalContext() {
     const additionalContextPromise = new Promise<void>(resolve => {
@@ -1387,7 +1257,6 @@ class ApiTests extends ApiTestFixtureBase {
     assertEquals('Prompt Suggestion', invokeOptions.prompts?.[0]);
   }
 
-
   async testGetTabByIdWithDiscard() {
     assertDefined(this.host.getTabById);
 
@@ -1415,49 +1284,6 @@ class ApiTests extends ApiTestFixtureBase {
     const newSeq = observeSequence(this.host.getTabById(tabId));
     await newSeq.waitForComplete();
     assertTrue(newSeq.isEmpty());
-  }
-
-  async testGetTabById() {
-    assertDefined(this.host.getTabById);
-
-    // Observe an invalid tab id.
-    {
-      const seq = observeSequence(this.host.getTabById('notA_TabId'));
-      await seq.completed;
-      assertTrue(seq.isEmpty());
-    }
-
-    // Observe a valid tab id that is not found.
-    {
-      const seq = observeSequence(this.host.getTabById('31415926'));
-      await seq.completed;
-      assertTrue(seq.isEmpty());
-    }
-
-    // Observe a valid tab id.
-    {
-      const tabId = this.testParams as string;
-      const obs = this.host.getTabById(tabId);
-      assertUndefined(obs.getCurrentValue());
-      const sequence = observeSequence(obs);
-      const tabData = await sequence.next();
-      assertEquals(tabId, tabData.tabId);
-      assertTrue(
-          tabData.url.endsWith('test.html'), `unexpected url: ${tabData.url}`);
-
-      // Navigate the tab in C++.
-      await this.advanceToNextStep();
-      await sequence.waitFor(tabData => tabData.url.endsWith('test.html?q=hi'));
-
-      // Close the tab in C++.
-      await this.advanceToNextStep();
-      await sequence.waitForComplete();
-
-      // A new subscription should complete without receiving anything.
-      const newSeq = observeSequence(this.host.getTabById(tabId));
-      await newSeq.waitForComplete();
-      assertTrue(newSeq.isEmpty());
-    }
   }
 
   async testGetZoomLevel() {
@@ -1567,15 +1393,6 @@ class ApiTestWithoutOpen extends ApiTestFixtureBase {
 
 
 
-class WebClientThatOpensOnce extends WebClient {
-  notifyPanelWillOpenCallCount = 0;
-  override async notifyPanelWillOpen(panelOpeningData: PanelOpeningData):
-      Promise<OpenPanelInfo> {
-    this.notifyPanelWillOpenCallCount += 1;
-    return super.notifyPanelWillOpen(panelOpeningData);
-  }
-}
-
 class DaisyChainApiTests extends ApiTestFixtureBase {
   async clickLinkInGlicUi() {
     const link = document.createElement('a');
@@ -1612,26 +1429,12 @@ class DaisyChainApiTests extends ApiTestFixtureBase {
   }
 }
 
-class NotifyPanelWillOpenTest extends ApiTestFixtureBase {
-  override createWebClient(): WebClient {
-    return new WebClientThatOpensOnce();
-  }
-
-  async testNotifyPanelWillOpenIsCalledOnce() {
-    await sleep(100);
-    assertEquals(
-        (this.client as WebClientThatOpensOnce).notifyPanelWillOpenCallCount,
-        1);
-  }
-}
-
 
 // All test fixtures. We look up tests by name, and the fixture name is ignored.
 // Therefore all tests must have unique names.
 const TEST_FIXTURES = [
   ApiTests,
   DaisyChainApiTests,
-  NotifyPanelWillOpenTest,
   ApiTestWithoutOpen,
 ];
 

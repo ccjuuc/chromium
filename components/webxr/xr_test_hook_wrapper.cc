@@ -54,24 +54,12 @@ std::optional<gfx::Transform> XRTestHookWrapper::WaitGetMagicWindowPose() {
   return std::nullopt;
 }
 
-device::ControllerRole
-XRTestHookWrapper::WaitGetControllerRoleForTrackedDeviceIndex(uint32_t index) {
+std::vector<device::ControllerFrameData>
+XRTestHookWrapper::WaitGetAllControllerData() {
   if (hook_) {
     mojo::ScopedAllowSyncCallForTesting scoped_allow_sync;
-    device::ControllerRole role;
-    hook_->WaitGetControllerRoleForTrackedDeviceIndex(index, &role);
-    return role;
-  }
-
-  return device::ControllerRole::kControllerRoleInvalid;
-}
-
-device::ControllerFrameData XRTestHookWrapper::WaitGetControllerData(
-    uint32_t index) {
-  if (hook_) {
-    mojo::ScopedAllowSyncCallForTesting scoped_allow_sync;
-    device::ControllerFrameData data;
-    hook_->WaitGetControllerData(index, &data);
+    std::vector<device::ControllerFrameData> data;
+    hook_->WaitGetAllControllerData(&data);
     return data;
   }
 

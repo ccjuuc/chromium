@@ -647,6 +647,10 @@ void TabStripCollectionController::ShiftTabRelative(
 void TabStripCollectionController::ShiftGroupRelative(
     const tab_groups::TabGroupId& group,
     int offset) {
+  if (GetFocusedGroup() == group) {
+    return;
+  }
+
   CHECK_EQ(1, std::abs(offset))
       << "Offset must be 1 or -1 to shift the group up or down.";
 
@@ -723,4 +727,12 @@ void TabStripCollectionController::OnGlassFrameEligibilityChanged(
     bool is_eligible) {
   is_glass_ = is_eligible;
   browser_view_->tab_strip_view()->OnGlassFrameEligibilityChanged(is_eligible);
+}
+
+int TabStripCollectionController::GetTabCount() const {
+  return model_->count();
+}
+
+int TabStripCollectionController::GetStrokeThickness() const {
+  return browser_view_ && browser_view_->ShouldDrawTabStrokes() ? 1 : 0;
 }

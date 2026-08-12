@@ -104,6 +104,7 @@
 #include "components/autofill/content/browser/integrators/email_verifier/email_verifier_delegate.h"
 #include "components/autofill/core/browser/actor/actor_key_metrics_recorder.h"
 #include "components/autofill/core/browser/at_memory/at_memory_enablement_utils.h"
+#include "components/autofill/core/browser/at_memory/at_memory_manager.h"
 #include "components/autofill/core/browser/at_memory_cross_tab_copy_paste_tracker.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
@@ -178,6 +179,7 @@
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
 #include "third_party/blink/public/mojom/content_extraction/ai_page_content.mojom.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/origin.h"
@@ -524,6 +526,10 @@ AtMemoryQueryService* ChromeAutofillClient::GetAtMemoryQueryService() {
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   return AtMemoryQueryServiceFactory::GetForProfile(profile);
+}
+
+AtMemoryManager* ChromeAutofillClient::GetAtMemoryManager() {
+  return at_memory_manager_.get();
 }
 
 personal_context::PersonalContextEligibilityState
@@ -1134,6 +1140,16 @@ ChromeAutofillClient::GetAutofillSnackbarController() {
   return autofill_snackbar_controller_impl_.get();
 }
 
+void ChromeAutofillClient::ShowAutofillAiLoadingDialog() {
+  GetAutofillDialogController()->ShowLoadingDialog(
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_AI_LOADING_DIALOG_LABEL),
+      base::Seconds(1));
+}
+
+void ChromeAutofillClient::DismissAutofillAiLoadingDialog() {
+  GetAutofillDialogController()->Dismiss();
+}
+
 AutofillDialogController* ChromeAutofillClient::GetAutofillDialogController() {
   if (!autofill_dialog_controller_impl_) {
     autofill_dialog_controller_impl_ =
@@ -1260,6 +1276,9 @@ ChromeAutofillClient::ChromeAutofillClient(content::WebContents* web_contents)
     autofill_ai_manager_ = std::make_unique<AutofillAiManager>(
         this, StrikeDatabaseFactory::GetForProfile(Profile::FromBrowserContext(
                   web_contents->GetBrowserContext())));
+  }
+  if (base::FeatureList::IsEnabled(features::kAutofillAtMemory)) {
+    at_memory_manager_ = std::make_unique<AtMemoryManager>(this);
   }
 #if BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::IsEnabled(features::kAutofillAiWithDataSchema)) {
@@ -1573,8 +1592,6 @@ void ChromeAutofillClient::ShowAutofillAiPrivateInferenceNotice() {
   GetAutofillMessageController()->Show(
       AutofillMessageModel::CreateForPrivateInferenceNotice(
           web_contents(), std::move(action_callback)));
-#else
-  NOTREACHED();
 #endif  // BUILDFLAG(IS_ANDROID)
 }
 

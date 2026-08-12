@@ -23,6 +23,8 @@
 #include "remoting/host/base/desktop_environment_options.h"
 #include "remoting/host/mojom/peer_session.mojom.h"
 #include "remoting/protocol/errors.h"
+#include "remoting/protocol/transport.h"
+#include "remoting/signaling/jingle_data_structures.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace remoting {
@@ -42,15 +44,72 @@ class MockPeerSessionReceiver : public mojom::PeerSession {
     receiver_.set_disconnect_handler(std::move(handler));
   }
 
+  void set_start_closure(base::OnceClosure closure) {
+    start_closure_ = std::move(closure);
+  }
+
+  void set_transport_closure(base::OnceClosure closure) {
+    transport_closure_ = std::move(closure);
+  }
+
   bool is_bound() const { return receiver_.is_bound(); }
+  bool start_called() const { return start_called_; }
+  bool start_transport_called() const { return start_transport_called_; }
+  bool process_transport_info_called() const {
+    return process_transport_info_called_;
+  }
+  const std::string& last_auth_key() const { return last_auth_key_; }
+  const JingleTransportInfo& last_transport_info() const {
+    return last_transport_info_;
+  }
+  const SessionPolicies& last_session_policies() const {
+    return last_session_policies_;
+  }
+  const SessionOptions& last_session_options() const {
+    return last_session_options_;
+  }
 
   // mojom::PeerSession implementation:
-  void Start(
-      mojo::PendingRemote<mojom::PeerSessionEventHandler> event_handler,
-      const std::string& client_jid,
-      mojo::PendingRemote<mojom::DesktopSession> control_remote,
-      mojo::PendingReceiver<mojom::DesktopSessionEvents> events_receiver,
-      const DesktopEnvironmentOptions& desktop_environment_options) override {}
+  void Start(mojo::PendingRemote<mojom::PeerSessionEventHandler> event_handler,
+             const std::string& client_jid,
+             mojo::PendingRemote<mojom::DesktopSession> control_remote,
+             mojo::PendingReceiver<mojom::DesktopSessionEvents> events_receiver,
+             const DesktopEnvironmentOptions& desktop_environment_options,
+             const SessionPolicies& session_policies,
+             const SessionOptions& session_options) override {
+    start_called_ = true;
+    if (event_handler) {
+      event_handler_remote_.Bind(std::move(event_handler));
+    }
+    last_session_policies_ = session_policies;
+    last_session_options_ = session_options;
+    if (start_closure_) {
+      std::move(start_closure_).Run();
+    }
+  }
+
+  void StartTransport(const std::string& auth_key,
+                      mojo::PendingRemote<mojom::TransportEventHandler>
+                          transport_event_handler) override {
+    start_transport_called_ = true;
+    last_auth_key_ = auth_key;
+    if (transport_event_handler) {
+      transport_event_handler_.Bind(std::move(transport_event_handler));
+    }
+    if (transport_closure_) {
+      std::move(transport_closure_).Run();
+    }
+  }
+
+  void ProcessTransportInfo(
+      const JingleTransportInfo& transport_info) override {
+    process_transport_info_called_ = true;
+    last_transport_info_ = transport_info;
+    if (transport_closure_) {
+      std::move(transport_closure_).Run();
+    }
+  }
+
   void DisconnectSession(protocol::ErrorCode error,
                          const std::string& error_details,
                          const SourceLocation& error_location) override {}
@@ -58,8 +117,23 @@ class MockPeerSessionReceiver : public mojom::PeerSession {
       mojo::PendingReceiver<mojom::ChromotingSessionServices> receiver)
       override {}
 
+  mojo::Remote<mojom::TransportEventHandler>& transport_event_handler() {
+    return transport_event_handler_;
+  }
+
  private:
   mojo::Receiver<mojom::PeerSession> receiver_{this};
+  mojo::Remote<mojom::PeerSessionEventHandler> event_handler_remote_;
+  mojo::Remote<mojom::TransportEventHandler> transport_event_handler_;
+  base::OnceClosure start_closure_;
+  base::OnceClosure transport_closure_;
+  bool start_called_ = false;
+  bool start_transport_called_ = false;
+  bool process_transport_info_called_ = false;
+  std::string last_auth_key_;
+  JingleTransportInfo last_transport_info_;
+  SessionPolicies last_session_policies_;
+  SessionOptions last_session_options_;
 };
 
 class MockPeerSessionManager : public mojom::PeerSessionManager {
@@ -191,7 +265,116 @@ TEST_F(IpcPeerSessionTest, CallingStubbedMethodsDoesNotCrash) {
   session->Start(&event_handler, "", DesktopEnvironmentOptions(), {},
                  SessionPolicies(), SessionOptions());
   session->DisconnectSession(protocol::ErrorCode::OK, "", FROM_HERE);
-  EXPECT_EQ(session->transport(), nullptr);
+  EXPECT_EQ(session->transport(), session.get());
+}
+
+TEST_F(IpcPeerSessionTest, TransportStartPropagatesAuthKey) {
+  mojo::PendingRemote<mojom::PeerSession> remote;
+  MockPeerSessionReceiver receiver;
+  receiver.Bind(remote.InitWithNewPipeAndPassReceiver());
+
+  auto session =
+      std::make_unique<IpcPeerSession>(std::move(remote), base::DoNothing());
+  MockEventHandler event_handler;
+  session->Start(&event_handler, "", DesktopEnvironmentOptions(), {},
+                 SessionPolicies(), SessionOptions());
+
+  base::RunLoop run_loop;
+  receiver.set_transport_closure(run_loop.QuitClosure());
+
+  session->transport()->Start("secret_auth_key", base::DoNothing());
+  run_loop.Run();
+
+  EXPECT_TRUE(receiver.start_transport_called());
+  EXPECT_EQ(receiver.last_auth_key(), "secret_auth_key");
+  EXPECT_TRUE(receiver.transport_event_handler().is_bound());
+}
+
+TEST_F(IpcPeerSessionTest, TransportProcessTransportInfoCallsRemote) {
+  mojo::PendingRemote<mojom::PeerSession> remote;
+  MockPeerSessionReceiver receiver;
+  receiver.Bind(remote.InitWithNewPipeAndPassReceiver());
+
+  auto session =
+      std::make_unique<IpcPeerSession>(std::move(remote), base::DoNothing());
+  MockEventHandler event_handler;
+  session->Start(&event_handler, "", DesktopEnvironmentOptions(), {},
+                 SessionPolicies(), SessionOptions());
+
+  base::RunLoop run_loop;
+  receiver.set_transport_closure(run_loop.QuitClosure());
+
+  JingleTransportInfo transport_info;
+  webrtc::Candidate candidate(
+      1, "udp", webrtc::SocketAddress("192.168.1.10", 5000), 2130706431, "user",
+      "pass", webrtc::IceCandidateType::kHost, 0, "found1", 0, 0);
+  transport_info.candidates.push_back(
+      IceTransportInfo::NamedCandidate("audio", candidate, 0));
+  session->transport()->ProcessTransportInfo(transport_info);
+  run_loop.Run();
+
+  EXPECT_TRUE(receiver.process_transport_info_called());
+  ASSERT_EQ(receiver.last_transport_info().candidates.size(), 1u);
+  EXPECT_EQ(receiver.last_transport_info().candidates[0].name, "audio");
+}
+
+TEST_F(IpcPeerSessionTest, SendTransportInfoDispatchesToCallback) {
+  mojo::PendingRemote<mojom::PeerSession> remote;
+  MockPeerSessionReceiver receiver;
+  receiver.Bind(remote.InitWithNewPipeAndPassReceiver());
+
+  auto session =
+      std::make_unique<IpcPeerSession>(std::move(remote), base::DoNothing());
+  MockEventHandler event_handler;
+
+  base::RunLoop start_loop;
+  receiver.set_start_closure(start_loop.QuitClosure());
+  session->Start(&event_handler, "", DesktopEnvironmentOptions(), {},
+                 SessionPolicies(), SessionOptions());
+  start_loop.Run();
+
+  ASSERT_TRUE(receiver.start_called());
+
+  base::RunLoop run_loop;
+  std::unique_ptr<JingleTransportInfo> received_info;
+
+  base::RunLoop start_transport_loop;
+  receiver.set_transport_closure(start_transport_loop.QuitClosure());
+
+  session->transport()->Start(
+      "auth_key", base::BindLambdaForTesting(
+                      [&](std::unique_ptr<JingleTransportInfo> info) {
+                        received_info = std::move(info);
+                        run_loop.Quit();
+                      }));
+  start_transport_loop.Run();
+
+  ASSERT_TRUE(receiver.transport_event_handler().is_bound());
+
+  JingleTransportInfo transport_info;
+  webrtc::Candidate candidate(
+      1, "udp", webrtc::SocketAddress("192.168.1.10", 5000), 2130706431, "user",
+      "pass", webrtc::IceCandidateType::kHost, 0, "found1", 0, 0);
+  transport_info.candidates.push_back(
+      IceTransportInfo::NamedCandidate("video", candidate, 1));
+  receiver.transport_event_handler()->SendTransportInfo(
+      std::move(transport_info));
+  run_loop.Run();
+
+  ASSERT_NE(received_info, nullptr);
+  ASSERT_EQ(received_info->candidates.size(), 1u);
+  EXPECT_EQ(received_info->candidates[0].name, "video");
+}
+
+TEST_F(IpcPeerSessionTest, UnboundTransportOperationsDoNotCrash) {
+  auto session =
+      std::make_unique<IpcPeerSession>(mojo::NullRemote(), base::DoNothing());
+  EXPECT_EQ(session->transport(), session.get());
+
+  session->transport()->Start("auth_key", base::DoNothing());
+
+  JingleTransportInfo transport_info;
+  EXPECT_TRUE(session->transport()->ProcessTransportInfo(transport_info));
 }
 
 TEST_F(IpcPeerSessionTest, CreateInvokesLaunchPeerSession) {
@@ -265,6 +448,41 @@ TEST_F(IpcPeerSessionTest,
   EXPECT_TRUE(mock_desktop_manager.get_desktop_session_called());
   ASSERT_TRUE(mock_desktop_manager.last_options());
   EXPECT_EQ(mock_desktop_manager.last_options()->required_username, "testuser");
+}
+
+TEST_F(IpcPeerSessionTest, StartPropagatesSessionPoliciesAndOptions) {
+  mojo::PendingRemote<mojom::PeerSession> remote;
+  MockPeerSessionReceiver receiver;
+  receiver.Bind(remote.InitWithNewPipeAndPassReceiver());
+
+  base::RunLoop run_loop;
+  receiver.set_start_closure(run_loop.QuitClosure());
+
+  IpcPeerSession session(
+      std::move(remote),
+      base::BindLambdaForTesting(
+          [](mojo::PendingReceiver<mojom::DesktopSession> control_receiver,
+             mojo::PendingRemote<mojom::DesktopSessionEvents> events_remote,
+             mojom::DesktopSessionOptionsPtr options) {}));
+
+  SessionPolicies policies;
+  policies.allow_file_transfer = false;
+  policies.clipboard_size_bytes = 2048;
+
+  SessionOptions options;
+  options.detect_updated_region = true;
+  options.disable_udp = true;
+
+  MockEventHandler event_handler;
+  session.Start(&event_handler, "test_client_jid", DesktopEnvironmentOptions(),
+                {}, policies, options);
+
+  run_loop.Run();
+  EXPECT_TRUE(receiver.start_called());
+  EXPECT_EQ(receiver.last_session_policies().allow_file_transfer, false);
+  EXPECT_EQ(receiver.last_session_policies().clipboard_size_bytes, 2048u);
+  EXPECT_EQ(receiver.last_session_options().detect_updated_region, true);
+  EXPECT_EQ(receiver.last_session_options().disable_udp, true);
 }
 
 TEST_F(IpcPeerSessionTest, CreateReturnsNullWhenManagerUnbound) {

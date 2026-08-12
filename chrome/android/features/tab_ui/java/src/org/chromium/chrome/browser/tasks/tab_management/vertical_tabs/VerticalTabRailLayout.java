@@ -27,6 +27,9 @@ import org.chromium.chrome.browser.tasks.tab_management.TabListRecyclerView;
 import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabListProperties.RailCollapseState;
 import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
 import org.chromium.chrome.tab_ui.R;
+import org.chromium.ui.base.LocalizationUtils;
+
+import java.util.Objects;
 
 /**
  * Root layout for the vertical tab rail container. Encapsulates child view layout styling based on
@@ -38,6 +41,9 @@ import org.chromium.chrome.tab_ui.R;
 public class VerticalTabRailLayout extends ConstraintLayout {
     private static final int HEADER_BUTTON_COUNT_SINGLE_ROW = 3;
     private @Nullable Callback<@RailCollapseState Integer> mExpandOrCollapseOnHoverListener;
+    // Uses Boolean instead of boolean so null represents the uninitialized state before the
+    // first layout pass, avoiding false positive cache matches against a default false value.
+    private @Nullable Boolean mLastAppliedShowSingleRowHeader;
 
     private VerticalTabListRecyclerView mRecyclerView;
     private TabListRecyclerView mPinnedTabsRecyclerView;
@@ -54,7 +60,6 @@ public class VerticalTabRailLayout extends ConstraintLayout {
     private @Px int mHeaderButtonGapPx;
     private @RailCollapseState int mCollapseState = RailCollapseState.EXPANDED;
     private @RailCollapseState int mLastAppliedCollapseState = RailCollapseState.UNKNOWN;
-    private boolean mLastAppliedShowSingleRowHeader;
 
     public VerticalTabRailLayout(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
@@ -100,20 +105,17 @@ public class VerticalTabRailLayout extends ConstraintLayout {
         TooltipCompat.setTooltipText(
                 mNewTabButton, getContext().getString(R.string.accessibility_toolbar_btn_new_tab));
 
-        updateButtonSizes();
-    }
-
-    private void updateButtonSizes() {
-        VerticalTabListViewBinder.updateButtonSizes(this);
-
+        // Update header dimensions
         Resources res = getContext().getResources();
         mHeaderButtonSizePx = res.getDimensionPixelSize(R.dimen.vertical_tabs_header_button_size);
         mHeaderButtonGapPx = res.getDimensionPixelSize(R.dimen.vertical_tabs_header_button_gap);
+        int horizontalPadding =
+                res.getDimensionPixelSize(R.dimen.vertical_tabs_rail_horizontal_margin) * 2;
         mMinSingleButtonRowWidthPx =
                 mHeaderButtonSizePx * HEADER_BUTTON_COUNT_SINGLE_ROW
                         + mHeaderButtonGapPx * (HEADER_BUTTON_COUNT_SINGLE_ROW - 1)
-                        + getPaddingStart()
-                        + getPaddingEnd();
+                        + horizontalPadding;
+        updateHeaderLayoutForWidth(getTargetWidth());
     }
 
     /** Returns the main tab list recycler view. */
@@ -151,15 +153,25 @@ public class VerticalTabRailLayout extends ConstraintLayout {
     public void setCollapseState(@RailCollapseState int collapseState) {
         if (mCollapseState == collapseState) return;
         mCollapseState = collapseState;
-        updateHeaderLayoutForWidth(getWidth());
+        updateHeaderLayoutForWidth(getTargetWidth());
+    }
+
+    /** Returns whether the rail is currently in the collapsed state. */
+    public boolean isCollapsed() {
+        return mCollapseState == RailCollapseState.COLLAPSED;
     }
 
     @Override
-    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-        super.onSizeChanged(w, h, oldw, oldh);
-        if (w != oldw) {
-            updateHeaderLayoutForWidth(w);
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int width = MeasureSpec.getSize(widthMeasureSpec);
+        if (width > 0) {
+            // Safe and inexpensive to call in onMeasure(): updateHeaderLayoutForWidth() compares
+            // against mLastAppliedCollapseState and mLastAppliedShowSingleRowHeader, returning
+            // early with a single comparison when dimensions do not cross the single-row/two-row
+            // breakpoint threshold.
+            updateHeaderLayoutForWidth(width);
         }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
     }
 
     @Override
@@ -227,21 +239,55 @@ public class VerticalTabRailLayout extends ConstraintLayout {
     }
 
     /**
+     * Resolves the intended width of the rail before measurement has completed.
+     *
+     * <p>During cold start or programmatic state changes prior to the first layout pass, {@link
+     * #getWidth()} returns 0. This method inspects the parent container's or the layout's explicit
+     * {@link ViewGroup.LayoutParams#width} to determine the destination width in advance, falling
+     * back to {@link #getWidth()} if no explicit pixel width is set.
+     */
+    private int getTargetWidth() {
+        if (getParent() instanceof View parent) {
+            ViewGroup.LayoutParams lp = parent.getLayoutParams();
+            if (lp != null && lp.width > 0) {
+                return lp.width;
+            }
+        }
+        ViewGroup.LayoutParams lp = getLayoutParams();
+        if (lp != null && lp.width > 0) {
+            return lp.width;
+        }
+        return getWidth();
+    }
+
+    /**
      * Updates header child view styling and layout parameters for the given rail width.
+     *
+     * <p>When transitioning collapse states or during cold start before layout has completed,
+     * {@code width} may be unmeasured (<= 0) or {@link #getWidth()} may return stale pre-transition
+     * bounds (e.g. 48dp while expanding). In these cases, {@link #getTargetWidth()} resolves the
+     * prospective destination width from {@link ViewGroup.LayoutParams#width} so transition
+     * animations capture accurate end bounds without layout gaps or button clipping.
      *
      * @param width The measured width of the rail layout, or 0 if unmeasured.
      */
     private void updateHeaderLayoutForWidth(int width) {
+        if (width <= 0) {
+            width = getTargetWidth();
+        }
+
         boolean isCollapsed = mCollapseState == RailCollapseState.COLLAPSED;
         // Default to single-row header when unmeasured (width <= 0) to match the initial XML state.
         boolean canFitHeaderButtonsInSingleRow = width <= 0 || width >= mMinSingleButtonRowWidthPx;
         boolean showSingleRowHeader = !isCollapsed && canFitHeaderButtonsInSingleRow;
-        if (mCollapseState == mLastAppliedCollapseState
-                && mLastAppliedShowSingleRowHeader == showSingleRowHeader) {
+        if (mLastAppliedCollapseState == mCollapseState
+                && Objects.equals(mLastAppliedShowSingleRowHeader, showSingleRowHeader)) {
             return;
         }
-        mLastAppliedCollapseState = mCollapseState;
-        mLastAppliedShowSingleRowHeader = showSingleRowHeader;
+        if (width > 0) {
+            mLastAppliedCollapseState = mCollapseState;
+            mLastAppliedShowSingleRowHeader = showSingleRowHeader;
+        }
 
         Resources res = getResources();
 
@@ -252,7 +298,8 @@ public class VerticalTabRailLayout extends ConstraintLayout {
 
         // Collapse button
         boolean isManuallyExpanded = mCollapseState == RailCollapseState.EXPANDED;
-        var collapseParams = (ViewGroup.MarginLayoutParams) mCollapseButton.getLayoutParams();
+        ViewGroup.MarginLayoutParams collapseParams =
+                (ViewGroup.MarginLayoutParams) mCollapseButton.getLayoutParams();
         collapseParams.width = mHeaderButtonSizePx;
         collapseParams.height = mHeaderButtonSizePx;
         collapseParams.bottomMargin =
@@ -276,7 +323,7 @@ public class VerticalTabRailLayout extends ConstraintLayout {
         mHeaderSpacer.setVisibility(showSingleRowHeader ? View.VISIBLE : View.GONE);
 
         // Tab actions container (for grid and search buttons)
-        var tabActionParams = mTabActionButtonsContainer.getLayoutParams();
+        ViewGroup.LayoutParams tabActionParams = mTabActionButtonsContainer.getLayoutParams();
         tabActionParams.width =
                 (!isCollapsed && !showSingleRowHeader)
                         ? ViewGroup.LayoutParams.MATCH_PARENT
@@ -290,29 +337,36 @@ public class VerticalTabRailLayout extends ConstraintLayout {
         // Grid button
         boolean fillRowSpace = !isCollapsed && !showSingleRowHeader;
 
-        var gridParams = (LinearLayout.LayoutParams) mGridButton.getLayoutParams();
+        LinearLayout.LayoutParams gridParams =
+                (LinearLayout.LayoutParams) mGridButton.getLayoutParams();
         gridParams.width = fillRowSpace ? 0 : mHeaderButtonSizePx;
         gridParams.height = mHeaderButtonSizePx;
         gridParams.weight = fillRowSpace ? 1.0f : 0.0f;
         gridParams.setMarginEnd(isCollapsed ? 0 : mHeaderButtonGapPx);
         gridParams.bottomMargin = isCollapsed ? mHeaderButtonGapPx : 0;
+        boolean isRtl = LocalizationUtils.isLayoutRtl();
         mGridButton.setBackgroundResource(
                 isCollapsed
                         ? R.drawable.vertical_tabs_top_rounded_button_background
-                        : R.drawable.vertical_tabs_left_rounded_button_background);
+                        : (isRtl
+                                ? R.drawable.vertical_tabs_right_rounded_button_background
+                                : R.drawable.vertical_tabs_left_rounded_button_background));
 
         // Search button
-        var searchParams = (LinearLayout.LayoutParams) mSearchButton.getLayoutParams();
+        LinearLayout.LayoutParams searchParams =
+                (LinearLayout.LayoutParams) mSearchButton.getLayoutParams();
         searchParams.width = fillRowSpace ? 0 : mHeaderButtonSizePx;
         searchParams.height = mHeaderButtonSizePx;
         searchParams.weight = fillRowSpace ? 1.0f : 0.0f;
         mSearchButton.setBackgroundResource(
                 isCollapsed
                         ? R.drawable.vertical_tabs_bottom_rounded_button_background
-                        : R.drawable.vertical_tabs_right_rounded_button_background);
+                        : (isRtl
+                                ? R.drawable.vertical_tabs_left_rounded_button_background
+                                : R.drawable.vertical_tabs_right_rounded_button_background));
 
         // New tab button
-        var newTabParams = mNewTabButton.getLayoutParams();
+        ViewGroup.LayoutParams newTabParams = mNewTabButton.getLayoutParams();
         int newTabHeight = res.getDimensionPixelSize(R.dimen.vertical_tabs_new_tab_button_height);
         newTabParams.width =
                 isCollapsed ? mHeaderButtonSizePx : ViewGroup.LayoutParams.MATCH_PARENT;

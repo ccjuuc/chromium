@@ -1206,7 +1206,7 @@ void BrowserActions::InitializeChromeMenuActions() {
               l10n_util::GetStringUTF16(IDS_NEW_TAB)))
           .SetImage(ui::ImageModel::FromVectorIcon(
               features::IsRoundedIconsEnabled()
-                  ? vector_icons::kAddWeight500Icon
+                  ? vector_icons::kAddWeight500CustomIcon
                   : vector_icons::kAddOldIcon,
               ui::kColorIcon))
           .Build());

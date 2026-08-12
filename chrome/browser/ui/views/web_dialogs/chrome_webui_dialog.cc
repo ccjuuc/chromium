@@ -20,7 +20,7 @@
 #include "ui/display/screen.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/webview/webview.h"
-#include "ui/views/layout/fill_layout.h"
+#include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -99,6 +99,8 @@ ChromeWebUIDialog::ChromeWebUIDialog(
   SetModalType(spec_.modal_type);
   SetShowCloseButton(spec_.show_close_button);
   SetHasWindowSizeControls(true);
+  set_esc_should_cancel_dialog_override(
+      spec_.esc_should_cancel_dialog_override);
 
   set_margins(gfx::Insets());
 
@@ -124,7 +126,17 @@ ChromeWebUIDialog::ChromeWebUIDialog(
                                          EffectiveMaxSize(spec_));
 
   view_observation_.Observe(web_view_);
-  SetContentsView(std::move(web_view));
+
+  // Nested rather than being the contents view directly: a View holds at most
+  // one element identifier and the dialog needs one of its own.
+  auto contents_container = std::make_unique<views::View>();
+  contents_container->SetUseDefaultFillLayout(true);
+  if (spec_.dialog_element_identifier) {
+    contents_container->SetProperty(views::kElementIdentifierKey,
+                                    spec_.dialog_element_identifier);
+  }
+  contents_container->AddChildView(std::move(web_view));
+  SetContentsView(std::move(contents_container));
 
   contents_wrapper_->SetHost(weak_ptr_factory_.GetWeakPtr());
 }
@@ -202,6 +214,18 @@ void ChromeWebUIDialog::ResizeDueToAutoResize(content::WebContents* source,
   // The non-client view includes the window frame, so this ensures the
   // entire dialog is sized correctly.
   GetWidget()->CenterWindow(GetWidget()->non_client_view()->GetPreferredSize());
+}
+
+bool ChromeWebUIDialog::HandleKeyboardEvent(
+    content::WebContents* source,
+    const input::NativeWebKeyboardEvent& event) {
+  views::Widget* widget = GetWidget();
+  if (!widget) {
+    return false;
+  }
+
+  return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
+      event, widget->GetFocusManager());
 }
 
 void ChromeWebUIDialog::OnViewAddedToWidget(views::View* observed_view) {

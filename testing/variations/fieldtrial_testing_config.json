@@ -3017,6 +3017,25 @@
             ]
         }
     ],
+    "AutofillEnableExpandIbanRegexPattern": [
+        {
+            "platforms": [
+                "android",
+                "chromeos",
+                "linux",
+                "mac",
+                "windows"
+            ],
+            "experiments": [
+                {
+                    "name": "Enabled",
+                    "enable_features": [
+                        "AutofillEnableExpandIbanRegexPattern"
+                    ]
+                }
+            ]
+        }
+    ],
     "AutofillEnableImportOfUnchangedValuesForCountryAndState": [
         {
             "platforms": [
@@ -4744,21 +4763,6 @@
             ]
         }
     ],
-    "BusyLoopAggressiveAfterCommittedLoad": [
-        {
-            "platforms": [
-                "android"
-            ],
-            "experiments": [
-                {
-                    "name": "Enabled",
-                    "enable_features": [
-                        "BusyLoopAggressiveAfterCommittedLoad"
-                    ]
-                }
-            ]
-        }
-    ],
     "BusyLoopLessWhenCompositorGesture": [
         {
             "platforms": [
@@ -4766,8 +4770,9 @@
             ],
             "experiments": [
                 {
-                    "name": "WithOptimization_20260625",
+                    "name": "WithOptimization",
                     "enable_features": [
+                        "BusyLoopAggressiveAfterCommittedLoad",
                         "BusyLoopLessWhenCompositorGesture",
                         "BusyLoopOnMainThread"
                     ]
@@ -8538,6 +8543,22 @@
             ]
         }
     ],
+    "DelayNativePaymentAppScrimShow": [
+        {
+            "platforms": [
+                "android",
+                "android_webview"
+            ],
+            "experiments": [
+                {
+                    "name": "Enabled",
+                    "enable_features": [
+                        "DelayNativePaymentAppScrimShow"
+                    ]
+                }
+            ]
+        }
+    ],
     "DelegatedCompositingOnWindows": [
         {
             "platforms": [
@@ -9041,6 +9062,16 @@
                 "ios"
             ],
             "experiments": [
+                {
+                    "name": "QRCode_All",
+                    "params": {
+                        "mobile_promo_on_desktop_promo_type": "1,4,5"
+                    },
+                    "enable_features": [
+                        "EnableCrossDevicePrefTracker",
+                        "MobilePromoOnDesktopWithQRCodeWave1"
+                    ]
+                },
                 {
                     "name": "Reminder_ESB",
                     "params": {
@@ -10435,21 +10466,6 @@
                     "name": "Enabled",
                     "enable_features": [
                         "EnableExtensionInstallPolicyFetching"
-                    ]
-                }
-            ]
-        }
-    ],
-    "EnableExtensionsForCorpDesktopAndroid": [
-        {
-            "platforms": [
-                "android"
-            ],
-            "experiments": [
-                {
-                    "name": "Enabled_20260219",
-                    "enable_features": [
-                        "EnableExtensionsForCorpDesktopAndroid"
                     ]
                 }
             ]
@@ -13738,21 +13754,6 @@
             ]
         }
     ],
-    "HeatmapPalmDetectionStudy": [
-        {
-            "platforms": [
-                "chromeos"
-            ],
-            "experiments": [
-                {
-                    "name": "Enabled",
-                    "enable_features": [
-                        "EnableHeatmapPalmDetection"
-                    ]
-                }
-            ]
-        }
-    ],
     "HeliosClientMigration": [
         {
             "platforms": [
@@ -16100,6 +16101,9 @@
             "experiments": [
                 {
                     "name": "Enabled",
+                    "params": {
+                        "allow-signed-out": "false"
+                    },
                     "enable_features": [
                         "ContextualTasksSidePanel",
                         "LensSidePanelUnification"
@@ -17155,6 +17159,21 @@
             ]
         }
     ],
+    "NetworkServiceIncreasedPriorityWhileLoading": [
+        {
+            "platforms": [
+                "android"
+            ],
+            "experiments": [
+                {
+                    "name": "WhileLoading",
+                    "enable_features": [
+                        "NetworkServiceIncreasedPriorityWhileLoading"
+                    ]
+                }
+            ]
+        }
+    ],
     "NetworkServiceSandboxLinuxAndChromeOS": [
         {
             "platforms": [
@@ -17183,21 +17202,6 @@
                     "name": "Enabled_20231025",
                     "enable_features": [
                         "NetworkServiceSandbox"
-                    ]
-                }
-            ]
-        }
-    ],
-    "NetworkServiceThreadIncreasedPriorityV2": [
-        {
-            "platforms": [
-                "android"
-            ],
-            "experiments": [
-                {
-                    "name": "WhileLoading",
-                    "enable_features": [
-                        "NetworkServiceIncreasedPriorityWhileLoading"
                     ]
                 }
             ]
@@ -18989,7 +18993,8 @@
                     },
                     "enable_features": [
                         "PartitionAllocSchedulerLoopQuarantine",
-                        "PartitionAllocSchedulerLoopQuarantineTaskObserverForBrowserUIThread"
+                        "PartitionAllocSchedulerLoopQuarantineTaskObserverForBrowserUIThread",
+                        "PartitionAllocWithAdvancedChecks"
                     ],
                     "disable_features": [
                         "ScreenAIPartitionAllocAdvancedChecksEnabled"
@@ -19646,6 +19651,21 @@
             ]
         }
     ],
+    "PermissionPredictionsGeolocationAccuracy": [
+        {
+            "platforms": [
+                "android"
+            ],
+            "experiments": [
+                {
+                    "name": "Enabled",
+                    "enable_features": [
+                        "PermissionPredictionsGeolocationAccuracy"
+                    ]
+                }
+            ]
+        }
+    ],
     "PermissionPromiseLifetimeModulationAndroid": [
         {
             "platforms": [
@@ -19959,6 +19979,27 @@
                     },
                     "enable_features": [
                         "AddTLSServerHandshakePadding"
+                    ]
+                }
+            ]
+        }
+    ],
+    "PqcCupSigning": [
+        {
+            "platforms": [
+                "android",
+                "android_webview",
+                "chromeos",
+                "ios",
+                "linux",
+                "mac",
+                "windows"
+            ],
+            "experiments": [
+                {
+                    "name": "Enabled",
+                    "enable_features": [
+                        "PqcCupSigning"
                     ]
                 }
             ]
@@ -20712,26 +20753,6 @@
             ]
         }
     ],
-    "PrivateAggregationApiErrorReporting": [
-        {
-            "platforms": [
-                "android",
-                "chromeos",
-                "fuchsia",
-                "linux",
-                "mac",
-                "windows"
-            ],
-            "experiments": [
-                {
-                    "name": "Enabled",
-                    "enable_features": [
-                        "PrivateAggregationApiErrorReporting"
-                    ]
-                }
-            ]
-        }
-    ],
     "PrivateStateTokens": [
         {
             "platforms": [
@@ -20856,7 +20877,8 @@
                 {
                     "name": "Enabled",
                     "enable_features": [
-                        "ProfileDiscOnAllPages"
+                        "ProfileDiscOnAllPages",
+                        "SigninLevelUpButton"
                     ]
                 }
             ]
@@ -21480,6 +21502,21 @@
                     },
                     "enable_features": [
                         "ReduceMojoURLLoaderFactoryCloning"
+                    ]
+                }
+            ]
+        }
+    ],
+    "RelaunchWaitForParentProcess": [
+        {
+            "platforms": [
+                "windows"
+            ],
+            "experiments": [
+                {
+                    "name": "Enabled",
+                    "enable_features": [
+                        "RelaunchWaitForParentProcess"
                     ]
                 }
             ]
@@ -22514,26 +22551,6 @@
             ]
         }
     ],
-    "SelectWebViewUntrustedEventRemoval": [
-        {
-            "platforms": [
-                "android",
-                "android_webview",
-                "chromeos",
-                "linux",
-                "mac",
-                "windows"
-            ],
-            "experiments": [
-                {
-                    "name": "Enabled",
-                    "enable_features": [
-                        "SelectWebViewUntrustedEventRemoval"
-                    ]
-                }
-            ]
-        }
-    ],
     "SensitiveContent": [
         {
             "platforms": [
@@ -22990,21 +23007,6 @@
                     "name": "Enabled",
                     "enable_features": [
                         "ShutdownPreNativeThreadPoolAfterStartup"
-                    ]
-                }
-            ]
-        }
-    ],
-    "SigninLevelUpButton": [
-        {
-            "platforms": [
-                "android"
-            ],
-            "experiments": [
-                {
-                    "name": "Enabled",
-                    "enable_features": [
-                        "SigninLevelUpButton"
                     ]
                 }
             ]
@@ -23923,6 +23925,24 @@
                         "SuppressesLoadingPredictorOnSlowNetwork",
                         "SuppressesPrerenderingOnSlowNetwork",
                         "SuppressesSearchPrefetchOnSlowNetwork"
+                    ]
+                }
+            ]
+        }
+    ],
+    "SuspiciousSiteWarningSurvey": [
+        {
+            "platforms": [
+                "android"
+            ],
+            "experiments": [
+                {
+                    "name": "Enabled",
+                    "params": {
+                        "probability": "1.0"
+                    },
+                    "enable_features": [
+                        "SuspiciousSiteWarningSurvey"
                     ]
                 }
             ]

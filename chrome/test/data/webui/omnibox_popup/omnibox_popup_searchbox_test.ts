@@ -36,6 +36,7 @@ function createDefaultOmniboxInputState(overrides?: Partial<OmniboxInputState>):
     permanentDisplayText: '',
     showFullUrl: false,
     queryZps: false,
+    keywordModel: null,
     ...overrides,
   };
 }
@@ -492,6 +493,73 @@ suite('OmniboxPopupSearchboxTest', function() {
     assertEquals('https://example.com', searchbox.$.input.inputElement.value);
   });
 
+  test('HandlesCopy', async () => {
+    callbackRouter.setInputState(createDefaultOmniboxInputState({
+      sequenceNumber: 7,
+      text: 'hello world',
+      selection: {start: 0, end: 11},
+      isFocused: true,
+    }));
+    await microtasksFinished();
+    handler.reset();
+
+    const copyEvent = new ClipboardEvent('copy', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+
+    searchbox.$.input.dispatchEvent(copyEvent);
+    await microtasksFinished();
+
+    assertTrue(copyEvent.defaultPrevented);
+    assertEquals(1, handler.getCallCount('onCutOrCopy'));
+    const [sequenceNumber, isCut, fullText, selection] =
+        handler.getArgs('onCutOrCopy')[0];
+    assertEquals(7, sequenceNumber);
+    assertFalse(isCut);
+    assertEquals('hello world', fullText);
+    assertEquals(0, selection.start);
+    assertEquals(11, selection.end);
+  });
+
+  test('HandlesCut', async () => {
+    callbackRouter.setInputState(createDefaultOmniboxInputState({
+      sequenceNumber: 8,
+      text: 'hello world',
+      selection: {start: 0, end: 5},
+      isFocused: true,
+    }));
+    await microtasksFinished();
+    handler.reset();
+
+    const cutEvent = new ClipboardEvent('cut', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+
+    searchbox.$.input.dispatchEvent(cutEvent);
+    await microtasksFinished();
+
+    assertTrue(cutEvent.defaultPrevented);
+    assertEquals(1, handler.getCallCount('onCutOrCopy'));
+    const [sequenceNumber, isCut, fullText, selection] =
+        handler.getArgs('onCutOrCopy')[0];
+    assertEquals(8, sequenceNumber);
+    assertTrue(isCut);
+    assertEquals('hello world', fullText);
+    assertEquals(0, selection.start);
+    assertEquals(5, selection.end);
+
+    // Verify local input element was updated to remaining text (" world")
+    // and caret moved to start of cut position (0, 0).
+    const input = searchbox.$.input.inputElement;
+    assertEquals(' world', input.value);
+    assertEquals(0, input.selectionStart);
+    assertEquals(0, input.selectionEnd);
+  });
+
   test('StripSchemasUnsafeForPaste', () => {
     const testCases: Array<{input: string, expected: string}> = [
       // Safe query.
@@ -757,14 +825,25 @@ suite('OmniboxPopupSearchboxTest', function() {
    mockInput.inputElement.value = 'test';
    mockInput.inputElement.dispatchEvent(new Event('test', {bubbles: true}));
 
-   // Simulate autocomplete results to open the dropdown.
+   // Simulate autocomplete results.
+   searchbox.lastQueriedInput = 'test';
    searchbox.onAutocompleteResultChanged(createAutocompleteResultForTesting({
      queryId: searchbox.activeQueryId,
      input: 'test',
-     matches: [createSearchMatchForTesting(), createSearchMatchForTesting()],
+     matches: [
+       createSearchMatchForTesting({
+         allowedToBeDefaultMatch: true,
+         inlineAutocompletion: 'ing',
+         fillIntoEdit: 'testing',
+       }),
+       createSearchMatchForTesting(),
+     ],
    }));
    await microtasksFinished();
    assertTrue(searchbox.dropdownIsVisible);
+   assertEquals('testing', searchbox.getInputElement().getInputValue());
+   assertEquals('test', searchbox.getInputElement().lastInput()?.text);
+   assertEquals('ing', searchbox.getInputElement().lastInput()?.inline);
 
    // Simulate `Enter` with Alt + Shift keys (background tab).
    searchbox.navigateToMatch(
@@ -773,6 +852,9 @@ suite('OmniboxPopupSearchboxTest', function() {
            'keydown', {key: 'Enter', altKey: true, shiftKey: true}));
    await microtasksFinished();
    assertTrue(searchbox.dropdownIsVisible);
+   assertEquals('testing', searchbox.getInputElement().getInputValue());
+   assertEquals('test', searchbox.getInputElement().lastInput()?.text);
+   assertEquals('ing', searchbox.getInputElement().lastInput()?.inline);
 
    // Simulate `Enter` with Meta key and without Shift key (background tab).
    searchbox.navigateToMatch(
@@ -781,6 +863,9 @@ suite('OmniboxPopupSearchboxTest', function() {
            'keydown', {key: 'Enter', metaKey: true, shiftKey: false}));
    await microtasksFinished();
    assertTrue(searchbox.dropdownIsVisible);
+   assertEquals('testing', searchbox.getInputElement().getInputValue());
+   assertEquals('test', searchbox.getInputElement().lastInput()?.text);
+   assertEquals('ing', searchbox.getInputElement().lastInput()?.inline);
 
    // Simulate a normal Enter key (foreground tab).
    searchbox.navigateToMatch(0, new KeyboardEvent('keydown', {key: 'Enter'}));

@@ -34,7 +34,7 @@ import {MockTimer} from 'chrome://webui-test/mock_timer.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
 import {$$, eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {createCtComposeboxApp, fixtureUrl, getSubmitButton, simulateUserInput} from './contextual_tasks_test_utils.js';
+import {createCtComposeboxApp, fixtureUrl, getInputValue, getSubmitButton, simulateUserInput} from './contextual_tasks_test_utils.js';
 import type {CtComposeboxAppParts} from './contextual_tasks_test_utils.js';
 import {TestContextualTasksBrowserProxy} from './test_contextual_tasks_browser_proxy.js';
 import {setupAutocompleteResults} from './test_searchbox_utils.js';
@@ -1393,7 +1393,7 @@ suite('ContextualTasksComposeboxTest', () => {
                   '#composebox');
           assertTrue(keydownDiv !== null);
 
-          assertEquals('', inputElement.value);
+          assertEquals('', getInputValue(inputElement));
           mockSearchboxPageHandler.reset();
 
           // Action: Press Enter on empty input.
@@ -1401,7 +1401,7 @@ suite('ContextualTasksComposeboxTest', () => {
           await microtasksFinished();
 
           // Assert: No newline and no submission.
-          assertFalse(inputElement.value.includes('\n'));
+          assertFalse(getInputValue(inputElement).includes('\n'));
           assertEquals(0, mockSearchboxPageHandler.getCallCount('submitQuery'));
         });
 
@@ -1428,7 +1428,7 @@ suite('ContextualTasksComposeboxTest', () => {
               // Cancel clears the input and its uploaded files, but never
               // submits.
               assertEquals('', innerComposebox.input);
-              assertEquals('', inputElement.value);
+              assertEquals('', getInputValue(inputElement));
               assertEquals(
                   0, mockSearchboxPageHandler.getCallCount('submitQuery'));
               assertEquals(
@@ -1445,7 +1445,7 @@ suite('ContextualTasksComposeboxTest', () => {
           await innerComposebox.updateComplete;
           assertEquals('', innerComposebox.inputPlaceholderOverride);
 
-          const initialPlaceholder = inputElement.placeholder;
+          const initialPlaceholder = inputElement.getAttribute('placeholder');
 
           // Set to true.
           wrapper.isOverlayOpenForAimVisualSearch = true;
@@ -1455,7 +1455,8 @@ suite('ContextualTasksComposeboxTest', () => {
           assertTrue(wrapper.isOverlayOpenForAimVisualSearch);
           assertEquals(
               'Test Lens Hint', innerComposebox.inputPlaceholderOverride);
-          assertEquals('Test Lens Hint', inputElement.placeholder);
+          assertEquals(
+              'Test Lens Hint', inputElement.getAttribute('placeholder'));
 
           // Set back to false.
           wrapper.isOverlayOpenForAimVisualSearch = false;
@@ -1464,7 +1465,8 @@ suite('ContextualTasksComposeboxTest', () => {
 
           assertFalse(wrapper.isOverlayOpenForAimVisualSearch);
           assertEquals('', innerComposebox.inputPlaceholderOverride);
-          assertEquals(initialPlaceholder, inputElement.placeholder);
+          assertEquals(
+              initialPlaceholder, inputElement.getAttribute('placeholder'));
         });
 
         test('ClearInputAndFocusClearsMatchesOnSubmit', () => {
@@ -1530,7 +1532,7 @@ suite('ContextualTasksComposeboxTest', () => {
           };
 
           wrapper.isZeroState = true;
-          innerComposebox.getInputElement().$.input.value = '';
+          simulateUserInput(innerComposebox.getInputElement().$.input, '');
           wrapper.clearInputAndFocus(false);
           assertEquals(
               0, clearAutocompleteMatchesCallCount,
@@ -1598,6 +1600,14 @@ suite('ContextualTasksComposeboxTest', () => {
           assertTrue(
               queryAutocompleteClearMatchesArg,
               'should pass clearMatches = true');
+        });
+
+        test('clear-smart-compose event clears the inline hint', () => {
+          const {innerComposebox} = parts;
+          innerComposebox.smartComposeInlineHint = 'test hint';
+          innerComposebox.getInputElement().dispatchEvent(
+              new CustomEvent('clear-smart-compose'));
+          assertEquals('', innerComposebox.smartComposeInlineHint);
         });
       });
 });
@@ -1852,7 +1862,7 @@ suite('ContextualTasksComposeboxTest', () => {
 
           assertEquals(
               0, innerComposebox.getDropdownElement().selectedMatchIndex);
-          assertEquals('match 1', inputElement.value);
+          assertEquals('match 1', getInputValue(inputElement));
           assertEquals(0, innerComposebox.selectedMatchIndex);
         });
 
@@ -1887,7 +1897,7 @@ suite('ContextualTasksComposeboxTest', () => {
               await innerComposebox.updateComplete;
               await app.updateComplete;
 
-              assertEquals('', inputElement.value);
+              assertEquals('', getInputValue(inputElement));
               assertEquals(
                   null, innerComposebox.getDropdownElement().result,
                   'Matches should be cleared after submit');
@@ -1897,7 +1907,7 @@ suite('ContextualTasksComposeboxTest', () => {
               pressEnter(inputElement);
               mockTimer.tick(0);
               await innerComposebox.updateComplete;
-              assertFalse(inputElement.value.includes('\n'));
+              assertFalse(getInputValue(inputElement).includes('\n'));
               assertEquals(
                   0, mockSearchboxPageHandler.getCallCount('submitQuery'));
               assertEquals(

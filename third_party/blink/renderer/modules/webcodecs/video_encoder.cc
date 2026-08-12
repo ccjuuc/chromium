@@ -190,8 +190,10 @@ media::EncoderStatus IsAcceleratedConfigurationSupported(
   }
 
   // Hardware encoders only support subsamplings other than 4:2:0 for AV1
-  // profile 1, where we require 4:4:4. High bit depths are supported by HEVC
-  // Main10 only.
+  // profile 1, where we require 4:4:4.
+  // High bit depths are supported by HEVC Main10 and AV1 Main only; AV1
+  // profile 1 is deliberately left out because the 4:4:4 hardware input format
+  // is 8 bit AYUV, and 10b lacks hardware support for now.
   media::VideoChromaSampling required_sampling =
       (profile == media::AV1PROFILE_PROFILE_HIGH)
           ? media::VideoChromaSampling::k444
@@ -200,7 +202,8 @@ media::EncoderStatus IsAcceleratedConfigurationSupported(
   const int bit_depth = options.bit_depth.value_or(8);
   const bool bit_depth_supported =
       bit_depth == 8 ||
-      (bit_depth == 10 && profile == media::HEVCPROFILE_MAIN10);
+      (bit_depth == 10 && (profile == media::HEVCPROFILE_MAIN10 ||
+                           profile == media::AV1PROFILE_PROFILE_MAIN));
   if ((options.subsampling.has_value() &&
        options.subsampling.value() != required_sampling) ||
       !bit_depth_supported) {
@@ -1032,8 +1035,18 @@ bool VideoEncoder::StartReadback(scoped_refptr<media::VideoFrame> frame,
     auto metadata_fix_lambda = [](scoped_refptr<media::VideoFrame> txt_frame,
                                   scoped_refptr<media::VideoFrame> result_frame)
         -> scoped_refptr<media::VideoFrame> {
-      if (!result_frame)
+      if (!result_frame) {
         return result_frame;
+      }
+      if (txt_frame->visible_rect() != gfx::Rect(txt_frame->coded_size()) ||
+          txt_frame->natural_size() != txt_frame->coded_size()) {
+        result_frame = media::VideoFrame::WrapVideoFrame(
+            result_frame, result_frame->format(), txt_frame->visible_rect(),
+            txt_frame->natural_size());
+        if (!result_frame) {
+          return nullptr;
+        }
+      }
       result_frame->set_timestamp(txt_frame->timestamp());
       result_frame->set_hdr_metadata(txt_frame->hdr_metadata());
       result_frame->metadata().MergeMetadataFrom(txt_frame->metadata());

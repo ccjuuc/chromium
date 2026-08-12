@@ -244,11 +244,7 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
             observers.rewind();
             while (observers.hasNext()) {
                 TabModelObserver obs = observers.next();
-                if (ChromeFeatureList.sTabClosureMethodRefactor.isEnabled()) {
-                    obs.onTabCloseUndone(Collections.singletonList(tab), /* isAllTabs= */ false);
-                } else {
-                    obs.tabClosureUndone(tab);
-                }
+                obs.tabClosureUndone(tab);
             }
 
             // If there is no selected tab, then trigger a proper selected tab update and
@@ -880,7 +876,11 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
 
     @Override
     public void setActive(boolean active) {
+        if (mActive == active) return;
         mActive = active;
+        for (TabModelObserver obs : mTabModelObservers) {
+            obs.onActiveChanged(active);
+        }
     }
 
     // TabModelJniBridge overrides.

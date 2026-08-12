@@ -1152,27 +1152,6 @@ const FeatureEntry::FeatureVariation kMobilePromoOnDesktopWave1Variations[] = {
      kMobilePromoOnDesktopPriceTrackingNotification, nullptr},
 };
 
-const FeatureEntry::FeatureParam kGeminiImageRemixToolShowFRERowParam[] = {
-    {kGeminiImageRemixToolShowFRERow, "true"}};
-const FeatureEntry::FeatureParam
-    kGeminiImageRemixToolShowAboveSearchImageParam[] = {
-        {kGeminiImageRemixToolShowAboveSearchImage, "true"}};
-const FeatureEntry::FeatureParam
-    kGeminiImageRemixToolShowBelowSearchImageParam[] = {
-        {kGeminiImageRemixToolShowBelowSearchImage, "true"}};
-const FeatureEntry::FeatureParam kGeminiImageRemixToolRemovePageContextParam[] =
-    {{kGeminiImageRemixToolRemovePageContext, "true"}};
-
-const FeatureEntry::FeatureVariation kGeminiImageRemixToolVariations[] = {
-    {"(Show FRE Row)", kGeminiImageRemixToolShowFRERowParam, nullptr},
-    {"(Show Above Search Image)",
-     kGeminiImageRemixToolShowAboveSearchImageParam, nullptr},
-    {"(Show Below Search Image)",
-     kGeminiImageRemixToolShowBelowSearchImageParam, nullptr},
-    {"(Disable Page Context)", kGeminiImageRemixToolRemovePageContextParam,
-     nullptr},
-};
-
 const FeatureEntry::FeatureParam kWalletApiPrivatePassesUrl[] = {
     {"wallet_pass_save_url", "https://wallet1ppasses.pa.googleapis.com"}};
 
@@ -1719,12 +1698,6 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flag_descriptions::kPageContentAnnotationsDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(
          page_content_annotations::features::kPageContentAnnotations)},
-    {"page-content-annotations-remote-page-metadata",
-     flag_descriptions::kPageContentAnnotationsRemotePageMetadataName,
-     flag_descriptions::kPageContentAnnotationsRemotePageMetadataDescription,
-     flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(
-         page_content_annotations::features::kRemotePageMetadata)},
     {"page-info-certificate-information",
      flag_descriptions::kViewCertificateInformationName,
      flag_descriptions::kViewCertificateInformationDescription,
@@ -2428,11 +2401,6 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      FEATURE_WITH_PARAMS_VALUE_TYPE(kChromeNextIa,
                                     kChromeNextIaVariations,
                                     "ChromeNextIa")},
-    {"gemini-image-remix-tool", flag_descriptions::kGeminiImageRemixToolName,
-     flag_descriptions::kGeminiImageRemixToolDescription, flags_ui::kOsIos,
-     FEATURE_WITH_PARAMS_VALUE_TYPE(kGeminiImageRemixTool,
-                                    kGeminiImageRemixToolVariations,
-                                    "GeminiImageRemixTool")},
     {"composebox-aim-disabled", flag_descriptions::kComposeboxAIMDisabledName,
      flag_descriptions::kComposeboxAIMDisabledDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(kComposeboxAIMDisabled)},
@@ -2916,6 +2884,11 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
     {"web-frame-tree", flag_descriptions::kWebFrameTreeName,
      flag_descriptions::kWebFrameTreeDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(web::features::kWebFrameTree)},
+    {"prepopulated-engines-shadow-variants",
+     flag_descriptions::kPrepopulatedEnginesShadowVariantsName,
+     flag_descriptions::kPrepopulatedEnginesShadowVariantsDescription,
+     flags_ui::kOsIos,
+     FEATURE_VALUE_TYPE(switches::kPrepopulatedEnginesShadowVariants)},
 });
 
 bool SkipConditionalFeatureEntry(const flags_ui::FeatureEntry& entry) {

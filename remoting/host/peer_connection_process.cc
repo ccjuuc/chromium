@@ -16,17 +16,18 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "remoting/base/session_policies.h"
+#include "remoting/host/crash_process.h"
 #include "remoting/host/ipc_desktop_environment.h"
 #include "remoting/host/peer_session_impl.h"
 #include "remoting/protocol/ice_config_fetcher.h"
+#include "remoting/protocol/transport.h"
+#include "remoting/signaling/jingle_data_structures.h"
 
 namespace remoting {
 
 PeerConnectionProcess::PeerConnectionProcess(
-    scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner)
-    : caller_task_runner_(caller_task_runner),
-      io_task_runner_(io_task_runner) {}
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner)
+    : task_runner_(task_runner) {}
 
 PeerConnectionProcess::~PeerConnectionProcess() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -37,11 +38,17 @@ bool PeerConnectionProcess::Start(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!daemon_channel_);
 
-  daemon_channel_ = IPC::ChannelProxy::Create(
-      std::move(channel_handle), IPC::Channel::MODE_CLIENT, this,
-      io_task_runner_, caller_task_runner_);
+  daemon_channel_ = IPC::ChannelProxy::Create(std::move(channel_handle),
+                                              IPC::Channel::MODE_CLIENT, this,
+                                              task_runner_, task_runner_);
 
   return true;
+}
+
+void PeerConnectionProcess::CrashProcess(const std::string& function_name,
+                                         const std::string& file_name,
+                                         int line_number) {
+  remoting::CrashProcess(function_name, file_name, line_number);
 }
 
 void PeerConnectionProcess::OnAssociatedInterfaceRequest(
@@ -49,7 +56,16 @@ void PeerConnectionProcess::OnAssociatedInterfaceRequest(
     mojo::ScopedInterfaceEndpointHandle handle) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (interface_name == mojom::PeerConnectionProcessControl::Name_) {
+  if (interface_name == mojom::WorkerProcessControl::Name_) {
+    if (worker_process_control_.is_bound()) {
+      LOG(FATAL) << "Receiver already bound for associated interface: "
+                 << mojom::WorkerProcessControl::Name_;
+    }
+
+    mojo::PendingAssociatedReceiver<mojom::WorkerProcessControl>
+        pending_receiver(std::move(handle));
+    worker_process_control_.Bind(std::move(pending_receiver));
+  } else if (interface_name == mojom::PeerConnectionProcessControl::Name_) {
     if (control_receiver_.is_bound()) {
       LOG(FATAL) << "Receiver already bound for associated interface: "
                  << mojom::PeerConnectionProcessControl::Name_;
@@ -79,7 +95,9 @@ void PeerConnectionProcess::Start(
     const std::string& client_jid,
     mojo::PendingRemote<mojom::DesktopSession> control_remote,
     mojo::PendingReceiver<mojom::DesktopSessionEvents> events_receiver,
-    const DesktopEnvironmentOptions& desktop_environment_options) {
+    const DesktopEnvironmentOptions& desktop_environment_options,
+    const SessionPolicies& session_policies,
+    const SessionOptions& session_options) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!peer_session_);
 
@@ -87,7 +105,7 @@ void PeerConnectionProcess::Start(
   desktop_session_events_receiver_ = std::move(events_receiver);
 
   desktop_environment_factory_ = std::make_unique<IpcDesktopEnvironmentFactory>(
-      caller_task_runner_, io_task_runner_,
+      task_runner_, task_runner_,
       base::BindRepeating(&PeerConnectionProcess::GetDesktopSession,
                           base::Unretained(this)));
 
@@ -109,7 +127,63 @@ void PeerConnectionProcess::Start(
   event_handler_.Bind(std::move(event_handler));
   peer_session_->Start(event_handler_.get(), client_jid,
                        desktop_environment_options, /*extensions=*/{},
-                       SessionPolicies(), SessionOptions());
+                       session_policies, session_options);
+
+  for (auto& receiver : pending_session_services_receivers_) {
+    peer_session_->OnSessionServicesClientConnected(std::move(receiver));
+  }
+  pending_session_services_receivers_.clear();
+
+  if (pending_start_transport_) {
+    auto pending = std::move(*pending_start_transport_);
+    pending_start_transport_.reset();
+    StartTransport(pending.auth_key,
+                   std::move(pending.transport_event_handler));
+  }
+
+  auto pending_transport_infos = std::move(pending_transport_infos_);
+  for (const auto& transport_info : pending_transport_infos) {
+    ProcessTransportInfo(transport_info);
+  }
+}
+
+void PeerConnectionProcess::StartTransport(
+    const std::string& auth_key,
+    mojo::PendingRemote<mojom::TransportEventHandler> transport_event_handler) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!peer_session_ || !peer_session_->transport()) {
+    pending_start_transport_ =
+        PendingStartTransport{auth_key, std::move(transport_event_handler)};
+    return;
+  }
+  transport_event_handler_.reset();
+  if (transport_event_handler) {
+    transport_event_handler_.Bind(std::move(transport_event_handler));
+  }
+  peer_session_->transport()->Start(
+      auth_key, base::BindRepeating(&PeerConnectionProcess::OnSendTransportInfo,
+                                    weak_factory_.GetWeakPtr()));
+}
+
+void PeerConnectionProcess::ProcessTransportInfo(
+    const JingleTransportInfo& transport_info) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!peer_session_ || !peer_session_->transport()) {
+    pending_transport_infos_.push_back(transport_info);
+    return;
+  }
+  peer_session_->transport()->ProcessTransportInfo(transport_info);
+}
+
+void PeerConnectionProcess::OnSendTransportInfo(
+    std::unique_ptr<JingleTransportInfo> transport_info) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!transport_info) {
+    return;
+  }
+  if (transport_event_handler_.is_bound()) {
+    transport_event_handler_->SendTransportInfo(std::move(*transport_info));
+  }
 }
 
 void PeerConnectionProcess::DisconnectSession(
@@ -127,6 +201,8 @@ void PeerConnectionProcess::OnSessionServicesClientConnected(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (peer_session_) {
     peer_session_->OnSessionServicesClientConnected(std::move(receiver));
+  } else {
+    pending_session_services_receivers_.push_back(std::move(receiver));
   }
 }
 
@@ -140,6 +216,10 @@ void PeerConnectionProcess::OnSessionDisconnected() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   LOG(INFO)
       << "PeerSession dropped by Network process; shutting down PC process.";
+  transport_event_handler_.reset();
+  pending_start_transport_.reset();
+  pending_transport_infos_.clear();
+  pending_session_services_receivers_.clear();
   Shutdown(0);
 }
 

@@ -623,6 +623,12 @@ inline constexpr char kEnableActivitylessSigninAllEntryPointDescription[] =
     "When enabled, activityless sign-in will be used for all entry points on "
     "Android.";
 
+inline constexpr char kOpenSystemAccountSettingsDirectlyName[] =
+    "Open system account settings directly";
+inline constexpr char kOpenSystemAccountSettingsDirectlyDescription[] =
+    "When enabled, system account settings will be opened directly instead of "
+    "the account management screen on Desktop Android.";
+
 inline constexpr char kEnableWebSigninLoadingDialogName[] =
     "Enable Web Signin Loading Dialog";
 inline constexpr char kEnableWebSigninLoadingDialogDescription[] =
@@ -736,6 +742,11 @@ inline constexpr char kPrefetchActivationBeaconName[] =
 inline constexpr char kPrefetchActivationBeaconDescription[] =
     "If enabled, prefetch activation beacon will be sent when a prefetch is "
     "activated.";
+inline constexpr char kPrepopulatedEnginesShadowVariantsName[] =
+    "Prepopulated Engines Shadow Variants";
+inline constexpr char kPrepopulatedEnginesShadowVariantsDescription[] =
+    "Enables shadow variants for prepopulated engines resolution, allowing "
+    "alternative engines to be resolved in specific regions.";
 
 inline constexpr char kPrerender2Name[] = "Prerendering";
 inline constexpr char kPrerender2Description[] =
@@ -2136,6 +2147,12 @@ inline constexpr char kApplyClientsideModelPredictionsForPasswordTypesName[] =
 inline constexpr char
     kApplyClientsideModelPredictionsForPasswordTypesDescription[] =
         "Enable using clientside model predictions to fill password forms.";
+
+inline constexpr char kApplyManagedProxyBypassListVerbatimName[] =
+    "Apply managed proxy bypass list verbatim";
+inline constexpr char kApplyManagedProxyBypassListVerbatimDescription[] =
+    "Applies policy and extension proxy bypass lists without adding implicit "
+    "bypass rules for simple hostnames.";
 
 inline constexpr char kEnableFencedFramesDeveloperModeName[] =
     "Enable the `FencedFrameConfig` constructor.";
@@ -3995,11 +4012,6 @@ inline constexpr char kPageContentAnnotationsName[] =
 inline constexpr char kPageContentAnnotationsDescription[] =
     "Enables page content to be annotated on-device.";
 
-inline constexpr char kPageContentAnnotationsRemotePageMetadataName[] =
-    "Page content annotations - Remote page metadata";
-inline constexpr char kPageContentAnnotationsRemotePageMetadataDescription[] =
-    "Enables fetching of page load metadata to be persisted on-device.";
-
 inline constexpr char kPageContentCacheName[] = "Page content cache";
 inline constexpr char kPageContentCacheDescription[] =
     "Enables caching of the annotated page content and screenshot";
@@ -4018,6 +4030,11 @@ inline constexpr char kPartitionAllocSchedulerLoopQuarantineName[] =
 inline constexpr char kPartitionAllocSchedulerLoopQuarantineDescription[] =
     "Enables PartitionAlloc's scheduler loop quarantine. Takes a JSON "
     "free-form configuration.";
+
+inline constexpr char kPartitionAllocWithAdvancedChecksName[] =
+    "PartitionAlloc with Advanced Checks";
+inline constexpr char kPartitionAllocWithAdvancedChecksDescription[] =
+    "Enables an extra security layer on PartitionAlloc.";
 
 inline constexpr char kPartitionVisitedLinkDatabaseWithSelfLinksName[] =
     "Partition the Visited Link Database, including 'self-links'";
@@ -4225,16 +4242,6 @@ inline constexpr char kPrivacySandboxEnrollmentOverridesDescription[] =
     "Allows a list of sites to use Privacy Sandbox features without them being "
     "enrolled and attested into the Privacy Sandbox experiment. See: "
     "https://developer.chrome.com/en/docs/privacy-sandbox/enroll/";
-inline constexpr char kPrivateMetricsEnablePumaName[] =
-    "Enable Private User Metrics";
-inline constexpr char kPrivateMetricsEnablePumaDescription[] =
-    "Enables collection of Private User Metrics.";
-
-inline constexpr char kPrivateMetricsEnablePumaRcName[] =
-    "Enable Private User Metrics for Regional Capabilities";
-inline constexpr char kPrivateMetricsEnablePumaRcDescription[] =
-    "Enables collection of Private User Metrics for Regional Capabilities. For "
-    "it to work, Private User Metrics need to be enabled too.";
 
 inline constexpr char kProfileDiscOnAllPagesName[] =
     "Profile Disc on All Pages";
@@ -6763,6 +6770,11 @@ inline constexpr char kReadAnythingImprovedUiName[] =
 inline constexpr char kReadAnythingImprovedUiDescription[] =
     "Enables menu grouping for Reading Mode and the listen to this page entry "
     "point.";
+inline constexpr char kReadAnythingReadAloudExperimentalPlaybackUiName[] =
+    "Reading Mode Read Aloud Experimental Playback UI";
+inline constexpr char
+    kReadAnythingReadAloudExperimentalPlaybackUiDescription[] =
+        "Enables the experimental playback UI for Reading Mode Read Aloud.";
 
 inline constexpr char kRealboxVirtualFocusNavigationName[] =
     "Enable Realbox Virtual Focus Navigation";
@@ -7136,6 +7148,14 @@ inline constexpr char kBlockRootWindowAccessibleNameChangeEventDescription[] =
     "notifications to assistive technologies. This can be useful in scenarios "
     "where frequent or unnecessary name change events could lead to "
     "performance issues or unwanted behavior in assistive applications.";
+
+inline constexpr char kSuppressAppKitFrameAdjustmentsDuringMoveLoopName[] =
+    "Suppress AppKit Frame Adjustments During Move Loop";
+inline constexpr char
+    kSuppressAppKitFrameAdjustmentsDuringMoveLoopDescription[] =
+        "Suppresses AppKit system frame adjustment and move events on macOS "
+        "while a window move loop is active (e.g. during tab dragging across "
+        "display boundaries).";
 
 // Windows and Mac -------------------------------------------------------------
 
@@ -7568,12 +7588,6 @@ inline constexpr char kEnableDisplayPerformanceModeDescription[] =
     "This option enables toggling different display features based on user "
     "setting and power state";
 
-inline constexpr char kDisableDnsProxyName[] =
-    "Disable DNS proxy service for ChromeOS";
-inline constexpr char kDisableDnsProxyDescription[] =
-    "Turns off DNS proxying and SecureDNS for ChromeOS (only). Does not impact "
-    "Chrome browser.";
-
 inline constexpr char kDisconnectWiFiOnEthernetConnectedName[] =
     "Disconnect WiFi on Ethernet";
 inline constexpr char kDisconnectWiFiOnEthernetConnectedDescription[] =
@@ -7634,12 +7648,6 @@ inline constexpr char kEnableKeyboardUsedPalmSuppressionName[] =
     "Use keyboard based palm suppression.";
 inline constexpr char kEnableKeyboardUsedPalmSuppressionDescription[] =
     "Enable keyboard usage based palm suppression.";
-
-inline constexpr char kEnableHeatmapPalmDetectionName[] =
-    "Enable Heatmap Palm Detection";
-inline constexpr char kEnableHeatmapPalmDetectionDescription[] =
-    "Experimental: Enable Heatmap Palm detection. Not compatible with all "
-    "devices.";
 
 inline constexpr char kEnableNeuralStylusPalmRejectionName[] =
     "Enable Neural Palm Detection";

@@ -1413,6 +1413,7 @@ void TabDragController::AttachToNewContext(
   const std::optional<tab_groups::TabGroupId> focused_group =
       tab_strip_model->GetFocusedGroup();
   if (focused_group.has_value() &&
+      !drag_data_.group_header_drag_data_.has_value() &&
       !std::ranges::any_of(drag_data_.tab_drag_data_, &TabDragData::pinned)) {
     const TabGroup* group =
         tab_strip_model->group_model()->GetTabGroup(*focused_group);
@@ -2736,7 +2737,7 @@ Browser* TabDragController::CreateBrowserForDrag(TabDragContext* source,
   // Do not copy attached window's restore id as this will cause Full Restore to
   // restore the newly created browser using the original browser's stored data.
   // See crbug.com/40181917 and crbug.com/40227947 for details.
-  create_params.restore_id = Browser::kDefaultRestoreId;
+  create_params.restore_id = BrowserWindowCreateParams::kDefaultRestoreId;
 
   // Open the window in the same display.
   display::Display display = display::Screen::Get()->GetDisplayNearestWindow(

@@ -102,7 +102,6 @@ ReadAnythingAppModel::SelectionEndpoint::SelectionEndpoint(
 ReadAnythingAppModel::ReadAnythingAppModel() {
   ResetTextSize();
   SetDefaultDistillationMethod();
-  UpdatePrioritizedSupportedFonts();
 }
 
 ReadAnythingAppModel::~ReadAnythingAppModel() = default;
@@ -131,8 +130,7 @@ void ReadAnythingAppModel::OnSettingsRestoredFromPrefs(
     bool images_enabled,
     read_anything::mojom::Colors color,
     read_anything::mojom::LineFocus last_non_disabled_line_focus,
-    bool line_focus_enabled,
-    const std::vector<std::string>& recently_used_fonts) {
+    bool line_focus_enabled) {
   line_spacing_ = line_spacing;
   letter_spacing_ = letter_spacing;
   font_name_ = std::move(font_name);
@@ -142,7 +140,6 @@ void ReadAnythingAppModel::OnSettingsRestoredFromPrefs(
   color_theme_ = color;
   last_non_disabled_line_focus_ = last_non_disabled_line_focus;
   line_focus_enabled_ = line_focus_enabled;
-  UpdatePrioritizedSupportedFonts(recently_used_fonts);
 }
 
 void ReadAnythingAppModel::Reset(std::vector<ui::AXNodeID> content_node_ids) {
@@ -562,6 +559,22 @@ void ReadAnythingAppModel::SetTreeInfoUrlInformation(
   }
 }
 
+void ReadAnythingAppModel::UpdateDistillationForDocsIfNeeded() {
+  // GetInitialDistillationMethod is sometimes called during
+  // OnActiveAXTreeIDChanged before SetTreeInfoUrlInformation has run and
+  // before the Google Docs URL is known. When the active page is later
+  // identified as Google Docs, fallback from Readability to Screen2x.
+  // Both next_distillation_method_ and current_content_distillation_method_
+  // are updated because this fallback occurs during initial page load while
+  // the UI is showing loading and no content has been rendered yet.
+  if (IsDocs() && is_readability_next_distillation_method()) {
+    set_next_distillation_method(DistillationMethod::kScreen2x);
+    set_current_content_distillation_method(DistillationMethod::kScreen2x);
+    set_requires_readability_distillation(false);
+    set_requires_distillation(true);
+  }
+}
+
 bool ReadAnythingAppModel::IsDocs() const {
   // Sometimes during an initial page load, this may be called before the
   // tree has been initialized. If this happens, IsDocs should return false
@@ -679,6 +692,10 @@ void ReadAnythingAppModel::UnserializeUpdates(const Updates& updates,
 
   ProcessGeneratedEvents(tree_id, event_generator, prev_tree_size,
                          tree->size());
+
+  if (tree_id == active_tree_id_) {
+    UpdateDistillationForDocsIfNeeded();
+  }
 }
 
 void ReadAnythingAppModel::PrepareForAXTreeUpdates(
@@ -1298,7 +1315,6 @@ void ReadAnythingAppModel::SetBaseLanguageCode(std::string base_language_code) {
   DCHECK(!base_language_code.empty());
   base_language_code_ = std::move(base_language_code);
   supported_fonts_ = GetSupportedFonts(base_language_code_);
-  UpdatePrioritizedSupportedFonts(prioritized_supported_fonts_);
 }
 
 void ReadAnythingAppModel::AddObserver(ModelObserver* observer) {
@@ -1311,42 +1327,6 @@ void ReadAnythingAppModel::RemoveObserver(ModelObserver* observer) {
 
 void ReadAnythingAppModel::SetFontSize(double font_size, int increment) {
   font_size_ = AdjustFontScale(font_size, increment);
-}
-
-void ReadAnythingAppModel::UpdateRecentlyUsedFonts(const std::string& font) {
-  if (!features::IsReadAnythingImprovedUiEnabled()) {
-    return;
-  }
-  std::erase(prioritized_supported_fonts_, font);
-  if (std::ranges::contains(supported_fonts_, font)) {
-    prioritized_supported_fonts_.insert(prioritized_supported_fonts_.begin(),
-                                        font);
-  }
-}
-
-void ReadAnythingAppModel::UpdatePrioritizedSupportedFonts(
-    const std::vector<std::string>& recently_used_fonts) {
-  if (!features::IsReadAnythingImprovedUiEnabled()) {
-    prioritized_supported_fonts_ = supported_fonts_;
-    return;
-  }
-
-  prioritized_supported_fonts_.clear();
-  prioritized_supported_fonts_.reserve(supported_fonts_.size());
-
-  for (const std::string& font : recently_used_fonts) {
-    if (prioritized_supported_fonts_.size() >= kReadAnythingMaxRecentFonts) {
-      break;
-    }
-    if (std::ranges::contains(supported_fonts_, font)) {
-      prioritized_supported_fonts_.push_back(font);
-    }
-  }
-  for (const std::string& font : supported_fonts_) {
-    if (!std::ranges::contains(prioritized_supported_fonts_, font)) {
-      prioritized_supported_fonts_.push_back(font);
-    }
-  }
 }
 
 const std::set<ui::AXNodeID>* ReadAnythingAppModel::GetCurrentlyVisibleNodes()

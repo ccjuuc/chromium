@@ -10,8 +10,14 @@
 
 #include "base/containers/circular_deque.h"
 #include "base/memory/raw_ref.h"
+#include "components/autofill/content/renderer/form_autofill_util.h"
+#include "components/autofill/content/renderer/timing.h"
 #include "components/autofill/core/common/aliases.h"
 #include "components/autofill/core/common/unique_ids.h"
+
+namespace autofill {
+class FieldDataManager;
+}
 
 namespace blink {
 class WebElement;
@@ -19,6 +25,11 @@ class WebFormControlElement;
 class WebKeyboardEvent;
 struct RendererPreferences;
 }  // namespace blink
+
+namespace ukm {
+class MojoUkmRecorder;
+class UkmRecorder;
+}  // namespace ukm
 
 namespace autofill {
 
@@ -59,12 +70,6 @@ class AtMemoryHandler {
   bool DidReceiveKeyDown(const blink::WebElement& element,
                          const blink::WebKeyboardEvent& event);
 
-  // Tries to preview filling `value` into `form_control` at the location where
-  // AtMemory was last triggered on `form_control`.
-  bool PreviewReplaceSelectionForAtMemory(
-      blink::WebFormControlElement& form_control,
-      const std::u16string& value);
-
   // Tries to fill `value` into `element` at the location where AtMemory was
   // last triggered on `element`.
   void ReplaceSelectionForAtMemory(blink::WebElement& element,
@@ -87,9 +92,25 @@ class AtMemoryHandler {
       const blink::WebElement& element,
       bool pop);
 
+  // Records a UKM event if the user pressed "@" twice in quick succession.
+  void MaybeRecordAtAt(const blink::WebElement& element,
+                       const blink::WebKeyboardEvent& event,
+                       const FieldDataManager& field_data_manager,
+                       const CallTimerState& timer_state,
+                       form_util::ButtonTitlesCache* button_titles_cache);
+
+  ukm::UkmRecorder* GetUkmRecorder();
+
   const raw_ref<AutofillAgent> agent_;
   base::circular_deque<AskForValuesToFillInfo>
       last_at_memory_ask_for_values_to_fills_;
+
+  std::unique_ptr<ukm::MojoUkmRecorder> ukm_recorder_;
+
+  struct {
+    base::TimeTicks time;
+    FieldRendererId field;
+  } last_at_key_press_;
 };
 
 }  // namespace autofill

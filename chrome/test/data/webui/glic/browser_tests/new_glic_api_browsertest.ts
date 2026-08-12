@@ -15,6 +15,106 @@ class ApiTests extends ApiTestFixtureBase {
 
   async testDoNothing() {}
 
+  async testDefaultInvocationSource() {
+    const panelOpenData =
+        checkDefined(this.client.panelOpenData.getCurrentValue());
+    assertEquals(
+        panelOpenData.invocationSource, InvocationSource.TOP_CHROME_BUTTON);
+  }
+
+  async testIsBrowserOpen() {
+    assertDefined(this.host.isBrowserOpen);
+    const isBrowserOpen = observeSequence(this.host.isBrowserOpen());
+    assertTrue(await isBrowserOpen.next());
+    // Close the browser.
+    await this.advanceToNextStep();
+    assertTrue(!await isBrowserOpen.next());
+  }
+
+  async testNavigateToDifferentClientPage() {
+    // This test function is run twice.
+    const runCount: number = this.testParams;
+
+    const url = new URL(window.location.href);
+    // First time:
+    if (runCount === 0) {
+      url.searchParams.set('foobar', '1');
+      (async () => {
+        await sleep(100);
+        location.href = url.toString();
+      })();
+      return;
+    }
+
+    // Second time:
+    assertEquals(runCount, 1);
+    assertEquals(url.searchParams.get('foobar'), '1');
+  }
+
+  async testGetModelQualityClientIdFeatureDisabled() {
+    assertDefined(this.host.getHostCapabilities);
+    const capabilities: Set<HostCapability> =
+        await this.host.getHostCapabilities();
+    assertFalse(capabilities.has(HostCapability.GET_MODEL_QUALITY_CLIENT_ID));
+
+    assertUndefined(this.host.getModelQualityClientId);
+  }
+
+  async testGetFocusedTabStateV2BrowserClosed() {
+    assertDefined(this.host.getFocusedTabStateV2);
+    const sequence =
+        observeSequence<FocusedTabData>(this.host.getFocusedTabStateV2());
+    // Ignore the initial focus.
+    await sequence.next();
+    await this.advanceToNextStep();
+    const focus = await sequence.next();
+    assertFalse(!!focus.hasFocus);
+    assertDefined(focus.hasNoFocus);
+  }
+
+  async testGetTabById() {
+    assertDefined(this.host.getTabById);
+
+    // Observe an invalid tab id.
+    {
+      const seq = observeSequence(this.host.getTabById('notA_TabId'));
+      await seq.completed;
+      assertTrue(seq.isEmpty());
+    }
+
+    // Observe a valid tab id that is not found.
+    {
+      const seq = observeSequence(this.host.getTabById('31415926'));
+      await seq.completed;
+      assertTrue(seq.isEmpty());
+    }
+
+    // Observe a valid tab id.
+    {
+      const tabId = this.testParams as string;
+      const obs = this.host.getTabById(tabId);
+      assertUndefined(obs.getCurrentValue());
+      const sequence = observeSequence(obs);
+      const tabData = await sequence.next();
+      assertEquals(tabId, tabData.tabId);
+      assertTrue(
+          tabData.url.endsWith('test.html'), `unexpected url: ${tabData.url}`);
+
+      // Navigate the tab in C++.
+      await this.advanceToNextStep();
+      await sequence.waitFor(tabData => tabData.url.endsWith('test.html?q=hi'));
+
+      // Close the tab in C++.
+      await this.advanceToNextStep();
+      await sequence.waitForComplete();
+
+      // A new subscription should complete without receiving anything.
+      const newSeq = observeSequence(this.host.getTabById(tabId));
+      await newSeq.waitForComplete();
+      assertTrue(newSeq.isEmpty());
+    }
+  }
+
   async testGetUserProfileInfo() {
     assertDefined(this.host.getUserProfileInfo);
     assertDefined(this.host.getPlatform);
@@ -1415,6 +1515,41 @@ class ApiTests extends ApiTestFixtureBase {
     await this.host.setAudioDucking(true);
   }
 
+  async testGeminiEnterpriseSettings() {
+    assertDefined(this.host.getGeminiEnterpriseSettings);
+    const settingsObservable = this.host.getGeminiEnterpriseSettings();
+
+    const settings = settingsObservable.getCurrentValue();
+    assertDefined(settings);
+    assertEquals(settings.projectId, 'switch-project');
+    assertEquals(settings.appId, 'switch-engine');
+    assertEquals(settings.location, 'switch-location');
+  }
+
+  async testGeminiEnterpriseSettingsDisabled() {
+    assertDefined(this.host.getGeminiEnterpriseSettings);
+    const settingsObservable = this.host.getGeminiEnterpriseSettings();
+    const settings = settingsObservable.getCurrentValue();
+    assertUndefined(settings);
+  }
+
+  async testGeminiEnterpriseSettingsPolicy() {
+    assertDefined(this.host.getGeminiEnterpriseSettings);
+    const settingsObservable = this.host.getGeminiEnterpriseSettings();
+    const settings = settingsObservable.getCurrentValue();
+    assertDefined(settings);
+    assertEquals(settings.projectId, 'policy-project');
+    assertEquals(settings.appId, 'policy-engine');
+    assertEquals(settings.location, 'policy-location');
+  }
+
+  async testGeminiEnterpriseSettingsPolicyUnset() {
+    assertDefined(this.host.getGeminiEnterpriseSettings);
+    const settingsObservable = this.host.getGeminiEnterpriseSettings();
+    const settings = settingsObservable.getCurrentValue();
+    assertUndefined(settings);
+  }
+
   async testGetDisplayMedia() {
     async function waitForFirstFrame(track: MediaStreamVideoTrack):
         Promise<boolean> {
@@ -1446,6 +1581,51 @@ class ApiTests extends ApiTestFixtureBase {
     const track = videoTracks[0] as MediaStreamVideoTrack;
     assertDefined(track);
     assertTrue(await waitForFirstFrame(track));
+  }
+
+  async testJournal() {
+    assertDefined(this.host.getJournalHost);
+    const journalHost = this.host.getJournalHost();
+    assertDefined(journalHost);
+    journalHost.start(64 * 1024 * 1024, true);
+    let snapshot = await journalHost.snapshot(false);
+    let lastJournalSize = snapshot.data.byteLength;
+    assertTrue(lastJournalSize > 0);
+    journalHost.instantEvent(23, 'instant_event', 'some_details');
+    snapshot = await journalHost.snapshot(false);
+    assertTrue(snapshot.data.byteLength > lastJournalSize);
+    lastJournalSize = snapshot.data.byteLength;
+    journalHost.clear();
+    snapshot = await journalHost.snapshot(false);
+    assertTrue(snapshot.data.byteLength < lastJournalSize);
+    lastJournalSize = snapshot.data.byteLength;
+    journalHost.beginAsyncEvent(10, 23, 'async_event', 'some_details');
+    journalHost.endAsyncEvent(10, 'some_details_end');
+    snapshot = await journalHost.snapshot(false);
+    assertTrue(snapshot.data.byteLength > lastJournalSize);
+    lastJournalSize = snapshot.data.byteLength;
+    journalHost.stop();
+  }
+
+  async testStopMicrophone() {
+    const stopMicrophonePromise = Promise.withResolvers<void>();
+    this.client.onStopMicrophone = () => {
+      stopMicrophonePromise.resolve();
+    };
+
+    await this.advanceToNextStep();
+    await waitFor(stopMicrophonePromise.promise);
+  }
+
+  async testSetSyntheticExperimentState() {
+    assertDefined(this.host.setSyntheticExperimentState);
+    this.host.setSyntheticExperimentState('TestTrial', 'Enabled');
+  }
+
+  async testSetSyntheticExperimentStateMultiProfile() {
+    assertDefined(this.host.setSyntheticExperimentState);
+    this.host.setSyntheticExperimentState('TestTrial', 'Group1');
+    this.host.setSyntheticExperimentState('TestTrial', 'Group2');
   }
 }
 
@@ -2128,6 +2308,31 @@ class ScreenshotTests extends ApiTestFixtureBase {
   }
 }
 
+class WebClientThatOpensOnce extends WebClient {
+  notifyPanelWillOpenCallCount = 0;
+  override async notifyPanelWillOpen(panelOpeningData: PanelOpeningData):
+      Promise<OpenPanelInfo> {
+    this.notifyPanelWillOpenCallCount += 1;
+    return super.notifyPanelWillOpen(panelOpeningData);
+  }
+}
+
+class NotifyPanelWillOpenTest extends ApiTestFixtureBase {
+  override createWebClient(): WebClient {
+    return new WebClientThatOpensOnce();
+  }
+
+  async testNotifyPanelWillOpenIsCalledOnce() {
+    const client = this.client as WebClientThatOpensOnce;
+    await runUntil(() => client.notifyPanelWillOpenCallCount > 0);
+    assertEquals(client.notifyPanelWillOpenCallCount, 1);
+    client.notifyPanelWillOpenCallCount = 0;
+    await this.advanceToNextStep();
+    await runUntil(() => client.notifyPanelWillOpenCallCount > 0);
+    assertEquals(client.notifyPanelWillOpenCallCount, 1);
+  }
+}
+
 const TEST_FIXTURES: Array<typeof ApiTestFixtureBase> = [
   ApiTests,
   AdditionalContextQueuedTest,
@@ -2137,6 +2342,7 @@ const TEST_FIXTURES: Array<typeof ApiTestFixtureBase> = [
   ApiTestFailsToInitialize,
   TriggeringUpdatesTest,
   ScreenshotTests,
+  NotifyPanelWillOpenTest,
 ];
 
 

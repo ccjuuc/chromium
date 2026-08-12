@@ -202,28 +202,6 @@ BASE_DECLARE_FEATURE(kGeminiUpdatedConsent);
 // Returns true if the updated Gemini consent is enabled.
 bool IsGeminiUpdatedConsentEnabled();
 
-// Feature flag for enabling the image remixing tool in the Gemini floaty.
-BASE_DECLARE_FEATURE(kGeminiImageRemixTool);
-bool IsGeminiImageRemixToolEnabled();
-
-// Returns true if the Gemini FRE should show the image remix row.
-bool IsGeminiImageRemixToolShowFRERowEnabled();
-extern const char kGeminiImageRemixToolShowFRERow[];
-
-// Returns true if the image remix tool should appear above
-// search image with Google (entry point will be in that same section).
-bool IsGeminiImageRemixToolShowAboveSearchImageEnabled();
-extern const char kGeminiImageRemixToolShowAboveSearchImage[];
-
-// Returns true if the image remix tool should appear below
-// search image with Google (entry point will be in that same section).
-bool IsGeminiImageRemixToolShowBelowSearchImageEnabled();
-extern const char kGeminiImageRemixToolShowBelowSearchImage[];
-
-// Returns true if the image remix tool should remove/disable PageContext.
-bool IsGeminiImageRemixToolRemovePageContextEnabled();
-extern const char kGeminiImageRemixToolRemovePageContext[];
-
 // Feature flag for enabling the Gemini eligibility ablation experiment.
 BASE_DECLARE_FEATURE(kGeminiEligibilityAblation);
 bool IsGeminiEligibilityAblationEnabled();
@@ -453,5 +431,28 @@ BASE_DECLARE_FEATURE(kGeminiVisualRichFRE);
 
 // Returns true if the Gemini Visual Rich FRE experiment is enabled.
 bool IsGeminiVisualRichFREEnabled();
+
+// Controls whether blacked out bounding boxes for sensitive payment fields are
+// applied to the screenshot in `PageContext`. Matches Blink's
+// `kGlicScreenshotSensitivePaymentRedaction`.
+// Note: When enabled, this feature enforces screenshot payment redactions on
+// `PageContext` extractions that use rich extraction, overriding any local
+// `PageContextWrapperConfig` setting. It has no effect on light extractions.
+BASE_DECLARE_FEATURE(kPageContextScreenshotSensitivePaymentRedaction);
+
+// Returns true if `kPageContextScreenshotSensitivePaymentRedaction` is enabled.
+bool IsPageContextScreenshotSensitivePaymentRedactionEnabled();
+
+// Controls whether Autofill credit card redactions are applied to clear
+// sensitive field values in the `AnnotatedPageContent` (APC) proto. Matches
+// Blink's `kAnnotatedPageContentAutofillCreditCardRedactions`.
+// Note: When enabled, this feature enforces field value redactions on
+// `PageContext` extractions that use rich extraction, overriding any local
+// `PageContextWrapperConfig` setting. It has no effect on light extractions.
+BASE_DECLARE_FEATURE(kPageContextAutofillCreditCardRedactions);
+
+// Returns true if `kPageContextAutofillCreditCardRedactions` is
+// enabled.
+bool IsPageContextAutofillCreditCardRedactionsEnabled();
 
 #endif  // IOS_CHROME_BROWSER_INTELLIGENCE_FEATURES_FEATURES_H_

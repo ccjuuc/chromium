@@ -190,7 +190,7 @@ class LockMetricsRecorderSupport
       recorder->RecordLockAcquisitionTime(
           base::LockMetricsRecorder::LockMetricSample{
               Microseconds(sample.InMicroseconds()),
-              base::LockMetricsRecorder::LockType::kPartitionAllocLock});
+              &GetPartitionAllocLockMetricTag()});
     }
   }
 };
@@ -293,6 +293,11 @@ void MemoryReclaimerSupport::MaybeScheduleTask(TimeDelta delay) {
   task_runner_->PostDelayedTask(
       FROM_HERE, BindOnce(&MemoryReclaimerSupport::Run, base::Unretained(this)),
       actual_delay);
+}
+
+const LockMetricTag& GetPartitionAllocLockMetricTag() {
+  static constinit LockMetricTag tag("PartitionAllocLock");
+  return tag;
 }
 
 void StartThreadCachePeriodicPurge() {
@@ -849,6 +854,17 @@ void InstallUnretainedDanglingRawPtrChecks() {
   }
 }
 
+bool IsSchedulerLoopQuarantineEnabled(std::string_view process_type) {
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+  return base::allocator::PartitionAllocSupport::
+             ShouldEnablePartitionAllocWithAdvancedChecks(process_type) &&
+         base::FeatureList::IsEnabled(
+             base::features::kPartitionAllocSchedulerLoopQuarantine);
+#else
+  return false;
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+}
+
 void ReconfigurePartitionForKnownProcess(std::string_view process_type) {
   DCHECK_NE(process_type, switches::kZygoteProcess);
   // TODO(keishi): Move the code to enable BRP back here after Finch
@@ -946,6 +962,22 @@ bool PartitionAllocSupport::ShouldEnableMemoryTaggingInRendererProcess() {
   return ShouldEnableMemoryTagging(switches::kRendererProcess);
 }
 
+// static
+bool PartitionAllocSupport::ShouldEnablePartitionAllocWithAdvancedChecks(
+    std::string_view process_type) {
+#if !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+  return false;
+#else
+  if (!base::FeatureList::IsEnabled(
+          base::features::kPartitionAllocWithAdvancedChecks)) {
+    return false;
+  }
+  return ShouldEnableFeatureOnProcess(
+      base::features::kPartitionAllocWithAdvancedChecksEnabledProcessesParam
+          .Get(),
+      process_type);
+#endif  // !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+}
 
 // static
 PartitionAllocSupport::BrpConfiguration
@@ -1356,7 +1388,9 @@ void PartitionAllocSupport::ReconfigureAfterFeatureListInit(
         SchedulerLoopQuarantineBranchType::kMain);
   }
 
-  if (HasMiracleObject(process_type_identifier)) {
+  bool enable_pa_with_advanced_checks =
+      ShouldEnablePartitionAllocWithAdvancedChecks(process_type);
+  if (enable_pa_with_advanced_checks) {
     allocator_shim::InstallPartitionAllocWithAdvancedChecks();
   }
 #endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)

@@ -138,7 +138,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Windows.Enclave.{Type}.Available" enum="BooleanAvailable"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>ajgo@chromium.org</owner>
   <owner>wfh@chromium.org</owner>
   <summary>
@@ -310,6 +310,28 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Windows.InstallerDownloader.Reengagement.InfobarShown"
+    units="cycle" expires_after="2027-08-01">
+  <owner>songhaoli@chromium.org</owner>
+  <owner>top-chrome-desktop-ui@google.com</owner>
+  <summary>
+    Records which re-engagement campaign cycle (1, 2, or 3) was active when the
+    Installer Downloader infobar was shown. Logged when the infobar is shown (at
+    most once per browser session).
+  </summary>
+</histogram>
+
+<histogram name="Windows.InstallerDownloader.Reengagement.RequestAccepted"
+    units="cycle" expires_after="2027-08-01">
+  <owner>songhaoli@chromium.org</owner>
+  <owner>top-chrome-desktop-ui@google.com</owner>
+  <summary>
+    Records which re-engagement campaign cycle (1, 2, or 3) was active when the
+    user accepted the Installer Downloader infobar prompt. Logged at most once
+    per campaign (only if accepted).
+  </summary>
+</histogram>
+
 <histogram name="Windows.InstallerDownloader.RequestAccepted" enum="Boolean"
     expires_after="2027-01-17">
   <owner>koretadaniel@chromium.org</owner>
@@ -317,6 +339,18 @@ chromium-metrics-reviews@google.com.
   <summary>
     Records the user’s response to the infobar. Logged exactly once per prompt:
     - true: user accepted the prompt. - false: user dismissed the prompt.
+  </summary>
+</histogram>
+
+<histogram name="Windows.InstallerDownloader.TotalShowCount" units="count"
+    expires_after="2027-08-01">
+  <owner>songhaoli@chromium.org</owner>
+  <owner>top-chrome-desktop-ui@google.com</owner>
+  <summary>
+    Records the cumulative number of times the Installer Downloader infobar was
+    shown to the user across all cycles. Logged once per user when the campaign
+    ends (either because the user accepted, or because all allowed cycles were
+    exhausted).
   </summary>
 </histogram>
 
@@ -348,7 +382,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Windows.OneDriveSyncState.{SyncedState}" enum="BooleanEnabled"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>koretadaniel@chromium.org</owner>
   <owner>iclelland@chromium.org</owner>
   <summary>
@@ -366,7 +400,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Windows.OpenWithLauncherResult" enum="OpenWithLauncherResult"
-    expires_after="2026-12-06">
+    expires_after="2027-02-07">
   <owner>jessemckenna@google.com</owner>
   <owner>davidbienvenu@chromium.org</owner>
   <summary>
@@ -487,7 +521,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Windows.ProcessorFamily" enum="ProcessorFamily"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>rkc@chromium.org</owner>
   <owner>vnagarnaik@google.com</owner>
   <owner>rockot@chromium.org</owner>

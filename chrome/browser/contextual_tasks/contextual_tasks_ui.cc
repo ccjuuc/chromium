@@ -242,6 +242,22 @@ void AddContextMenuItemEligibilityLoadTimeData(base::DictValue& dict,
   }
 }
 
+std::string EntryPointToString(omnibox::ChromeAimEntryPoint entry_point) {
+  switch (entry_point) {
+    case omnibox::DESKTOP_CHROME_COBROWSE_TOOLBAR_BUTTON:
+    case omnibox::DESKTOP_CHROME_COBROWSE_PINNED_TOOLBAR_BUTTON:
+      return "toolbar";
+    case omnibox::DESKTOP_CHROME_COBROWSE_OMNIBOX_ACTION:
+      return "omnibox_action";
+    case omnibox::DESKTOP_CHROME_COBROWSE_OMNIBOX_TAB_SEARCH:
+      return "omnibox_tab_search";
+    case omnibox::DESKTOP_CHROME_COBROWSE_OMNIBOX_CONTEXTUAL_SUGGESTION:
+      return "omnibox_contextual_suggestion";
+    default:
+      return "unknown";
+  }
+}
+
 }  // namespace
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ContextualTasksUI,
@@ -397,6 +413,10 @@ ContextualTasksUI::ContextualTasksUI(content::WebUI* web_ui)
       SearchboxHandler::GetVoiceSearchCoherenceCobrowsingComposeboxEnabled());
 #endif  // BUILDFLAG(ENABLE_WEBUI_CONTEXTUAL_TASKS_COMPOSEBOX)
 
+  // Determine and cache tab input support on initialization.
+  are_tab_inputs_supported_on_init_ =
+      contextual_tasks::IsTabSharingEligible(profile);
+
   // Determine and cache contextual tasks eligibility on initialization. This
   // prevents the expand button from dynamically appearing or changing state
   // mid-session, avoiding a jarring user experience.
@@ -503,6 +523,7 @@ base::DictValue ContextualTasksUI::GetContextualTasksLoadTimeData(
   dict.Set(
       "voiceSearchCoherenceComposeboxesEnabled",
       SearchboxHandler::GetVoiceSearchCoherenceCobrowsingComposeboxEnabled());
+  dict.Set("composeboxSmartTabSharingSupported", !BUILDFLAG(IS_ANDROID));
 #endif  // BUILDFLAG(ENABLE_WEBUI_CONTEXTUAL_TASKS_COMPOSEBOX)
 
   int stsDefaultOnHeaderId = IDS_STS_IPH_DEFAULT_ON_HEADER;
@@ -1300,6 +1321,11 @@ void ContextualTasksUI::AddInitialTaskStateToDataSource(
                       ui_service_->IsSignedInToBrowserWithValidCredentials() &&
                       ui_service_->CookieJarContainsPrimaryAccount();
   source->AddBoolean("isSignedIn", is_signed_in);
+
+  omnibox::ChromeAimEntryPoint entry_point =
+      ui_service_ ? ui_service_->GetInitialEntryPointForTask(task_id)
+                  : omnibox::ChromeAimEntryPoint::UNKNOWN_AIM_ENTRY_POINT;
+  source->AddString("entryPoint", EntryPointToString(entry_point));
 }
 
 void ContextualTasksUI::OnSidePanelStateChanged() {
@@ -1402,7 +1428,7 @@ bool ContextualTasksUI::CanUpdateSuggestedTabContext(
     }
   }
 
-  if (!is_contextual_tasks_eligible_on_init_) {
+  if (!are_tab_inputs_supported_on_init_) {
     return false;
   }
 

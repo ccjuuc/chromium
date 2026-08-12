@@ -18,7 +18,7 @@ namespace chrome {
 
 std::unique_ptr<Browser> CreateBrowserWithAuraTestWindowForParams(
     std::unique_ptr<aura::Window> window,
-    Browser::CreateParams* params) {
+    BrowserWindowCreateParams params) {
   if (!window) {
     window = std::make_unique<aura::Window>(nullptr);
     window->SetId(0);
@@ -30,11 +30,11 @@ std::unique_ptr<Browser> CreateBrowserWithAuraTestWindowForParams(
       std::make_unique<TestBrowserWindowAura>(std::move(window));
 
   // Returned Browser takes ownership of `browser_window`.
-  return browser_window.release()->CreateBrowser(params);
+  return browser_window.release()->CreateBrowser(std::move(params));
 }
 
 std::unique_ptr<Browser> CreateBrowserWithViewsTestWindowForParams(
-    Browser::CreateParams params,
+    BrowserWindowCreateParams params,
     aura::Window* parent) {
   auto browser_window = std::make_unique<TestBrowserWindowViews>(parent);
   // Returned Browser takes ownership of `browser_window`.
@@ -94,12 +94,6 @@ std::unique_ptr<Browser> TestBrowserWindowAura::CreateBrowser(
   return browser;
 }
 
-std::unique_ptr<Browser> TestBrowserWindowAura::CreateBrowser(
-    Browser::CreateParams* params) {
-  params->window = this;
-  return CreateBrowser(CreateBrowserWindowCreateParams(*params));
-}
-
 TestBrowserWindowViews::TestBrowserWindowViews(aura::Window* parent)
     : widget_(std::make_unique<views::Widget>()) {
   views::Widget::InitParams params(
@@ -148,10 +142,4 @@ std::unique_ptr<Browser> TestBrowserWindowViews::CreateBrowser(
       DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
   browser_ = browser.get();
   return browser;
-}
-
-std::unique_ptr<Browser> TestBrowserWindowViews::CreateBrowser(
-    Browser::CreateParams params) {
-  params.window = this;
-  return CreateBrowser(CreateBrowserWindowCreateParams(params));
 }

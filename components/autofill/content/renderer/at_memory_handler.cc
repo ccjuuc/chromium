@@ -18,9 +18,16 @@
 #include "components/autofill/content/renderer/autofill_agent.h"
 #include "components/autofill/content/renderer/form_autofill_util.h"
 #include "components/autofill/content/renderer/synchronous_form_cache.h"
+#include "components/autofill/content/renderer/timing.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_util.h"
+#include "components/autofill/core/common/field_data_manager.h"
+#include "components/autofill/core/common/signatures.h"
 #include "content/public/renderer/render_frame.h"
+#include "content/public/renderer/render_thread.h"
+#include "services/metrics/public/cpp/mojo_ukm_recorder.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/platform/web_string.h"
@@ -137,6 +144,11 @@ bool AtMemoryHandler::ContentEditableDidChange(const WebElement& element) {
 
 bool AtMemoryHandler::DidReceiveKeyDown(const WebElement& element,
                                         const WebKeyboardEvent& event) {
+  MaybeRecordAtAt(
+      element, event, agent_->field_data_manager(),
+      agent_->GetCallTimerState(CallTimerState::CallSite::kDidReceiveKeyDown),
+      agent_->button_titles_cache());
+
   const RendererPreferences* prefs = GetRendererPreferences();
   if (!prefs || prefs->autofill_shortcut_key_code == ui::VKEY_UNKNOWN ||
       !base::FeatureList::IsEnabled(
@@ -174,41 +186,6 @@ bool AtMemoryHandler::DidReceiveKeyDown(const WebElement& element,
   return false;
 }
 
-// TODO(crbug.com/540805115): Remove or merge with the rest of the code.
-bool AtMemoryHandler::PreviewReplaceSelectionForAtMemory(
-    WebFormControlElement& form_control,
-    const std::u16string& value) {
-  const std::optional<AtMemoryHandler::AskForValuesToFillInfo> info =
-      FindAskForValuesToFill(form_control,
-                             /*pop=*/false);
-  if (!info) {
-    return false;
-  }
-
-  const blink::RendererPreferences* prefs = GetRendererPreferences();
-  WebString trigger =
-      WebString::FromUtf8(prefs ? prefs->autofill_trigger_string : "");
-  const unsigned int sel_start = form_control.SelectionStart();
-  const unsigned int sel_end = form_control.SelectionEnd();
-  std::u16string preview_value = form_control.EditingValue().Utf16();
-  // If there is no selection and the cursor is immediately preceded
-  // by the trigger string, we replace the trigger. Otherwise (e.g. if
-  // the user has already selected text or triggered via the context
-  // menu), we replace the current selection or insert at the cursor.
-  if (info->caused_by_trigger_string && !trigger.IsEmpty() &&
-      sel_start == sel_end && sel_start >= trigger.length() &&
-      form_control.EditingValue()
-          .Substring(sel_start - trigger.length(), trigger.length())
-          .Equals(trigger)) {
-    preview_value.replace(sel_start - trigger.length(), trigger.length(),
-                          value);
-  } else {
-    preview_value.replace(sel_start, sel_end - sel_start, value);
-  }
-  form_control.SetSuggestedValue(WebString::FromUtf16(preview_value));
-  return true;
-}
-
 void AtMemoryHandler::ReplaceSelectionForAtMemory(WebElement& element,
                                                   const std::u16string& value) {
   const std::optional<AskForValuesToFillInfo> info =
@@ -237,7 +214,7 @@ void AtMemoryHandler::ReplaceSelectionForAtMemory(WebElement& element,
 
   element.PasteText(WebString::FromUtf16(value),
                     /*replace_all=*/false,
-                    /*smart_replace=*/true);
+                    /*smart_replace=*/false);
 }
 
 std::optional<AtMemoryHandler::AskForValuesToFillInfo>
@@ -301,6 +278,94 @@ void AtMemoryHandler::MaybeUpdateAskForValuesToFill(
           trigger_source ==
           AutofillSuggestionTriggerSource::kAtMemoryTriggerString,
       .value_hash = base::FastHash(base::as_byte_span(value.Utf16()))});
+}
+
+ukm::UkmRecorder* AtMemoryHandler::GetUkmRecorder() {
+  if (!ukm_recorder_) {
+    mojo::Remote<ukm::mojom::UkmRecorderFactory> factory;
+    content::RenderThread::Get()->BindHostReceiver(
+        factory.BindNewPipeAndPassReceiver());
+    ukm_recorder_ = ukm::MojoUkmRecorder::Create(*factory);
+  }
+  return ukm_recorder_.get();
+}
+
+void AtMemoryHandler::MaybeRecordAtAt(
+    const WebElement& element,
+    const WebKeyboardEvent& event,
+    const FieldDataManager& field_data_manager,
+    const CallTimerState& timer_state,
+    form_util::ButtonTitlesCache* button_titles_cache) {
+  constexpr base::TimeDelta kAtAtThreshold = base::Milliseconds(500);
+
+  // This function is intended only for WebFormControlElements and for
+  // contenteditables that aren't WebFormElement. See
+  // form_util::GetFieldRendererId().
+  if (element.DynamicTo<WebFormElement>()) {
+    return;
+  }
+
+  if (base::IsAsciiControl(event.text[0])) {
+    return;
+  }
+
+  if (event.text[0] != u'@' || event.text[1] != 0 ||
+      (event.GetModifiers() & blink::WebInputEvent::kIsAutoRepeat)) {
+    last_at_key_press_ = {};
+    return;
+  }
+
+  const base::TimeTicks now = base::TimeTicks::Now();
+  if (last_at_key_press_.time.is_null() ||
+      now - last_at_key_press_.time > kAtAtThreshold ||
+      last_at_key_press_.field != form_util::GetFieldRendererId(element)) {
+    last_at_key_press_ = {now, form_util::GetFieldRendererId(element)};
+    return;
+  }
+  last_at_key_press_ = {};
+
+  const ukm::SourceId source_id = element && element.GetDocument()
+                                      ? element.GetDocument().GetUkmSourceId()
+                                      : ukm::kInvalidSourceId;
+  ukm::UkmRecorder* recorder = GetUkmRecorder();
+  if (!recorder || source_id == ukm::kInvalidSourceId) {
+    return;
+  }
+
+  ukm::builders::Autofill_AtAtPressed builder(source_id);
+
+  auto set_metrics = [&](const FormData& form, const FormFieldData& field) {
+    builder.SetFormSignature(HashFormSignature(CalculateFormSignature(form)));
+    builder.SetFieldSignature(
+        HashFieldSignature(CalculateFieldSignatureForField(field)));
+    builder.SetFormControlType(std::to_underlying(field.form_control_type()));
+    if (WebLocalFrame* frame = element.GetDocument().GetFrame()) {
+      const FieldRendererId field_id = field.renderer_id();
+      const blink::LocalFrameToken frame_token = frame->GetLocalFrameToken();
+      builder.SetFieldSessionIdentifier(StrToHash64Bit(
+          base::NumberToString(field_id.value()) + frame_token.ToString()));
+    }
+  };
+
+  if (WebFormControlElement control =
+          element.DynamicTo<WebFormControlElement>()) {
+    if (std::optional<form_util::FormAndField> form_and_field =
+            form_util::FindFormAndFieldForFormControlElement(
+                control, field_data_manager, timer_state, button_titles_cache,
+                /*form_cache=*/{})) {
+      const auto& [form, field] = *form_and_field;
+      set_metrics(form, field);
+    }
+  } else if (element && element.IsContentEditable()) {
+    if (std::optional<FormData> form =
+            form_util::FindFormForContentEditable(element)) {
+      if (!form->fields().empty()) {
+        set_metrics(*form, form->fields().front());
+      }
+    }
+  }
+
+  builder.Record(recorder);
 }
 
 const RendererPreferences* AtMemoryHandler::GetRendererPreferences() const {

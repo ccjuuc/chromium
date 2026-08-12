@@ -14,8 +14,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/stack_allocated.h"
 #include "base/time/time.h"
-#include "base/values.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/webapps/common/web_app_id.h"
@@ -24,6 +22,7 @@
 
 class Profile;
 class Browser;
+struct BrowserWindowCreateParams;
 class BrowserWindowInterface;
 class GURL;
 enum class WindowOpenDisposition;
@@ -108,16 +107,15 @@ void MaybeShowNavigationCaptureIph(webapps::AppId app_id,
 
 // This creates appropriate CreateParams for creating a PWA window or PWA popup
 // window.
-Browser::CreateParams CreateParamsForApp(const webapps::AppId& app_id,
-                                         bool is_popup,
-                                         bool trusted_source,
-                                         const gfx::Rect& window_bounds,
-                                         Profile* profile,
-                                         bool user_gesture);
+BrowserWindowCreateParams CreateParamsForApp(const webapps::AppId& app_id,
+                                             bool is_popup,
+                                             bool trusted_source,
+                                             const gfx::Rect& window_bounds,
+                                             Profile* profile,
+                                             bool user_gesture);
 
-Browser* CreateWebAppWindowMaybeWithHomeTab(
-    const webapps::AppId& app_id,
-    const Browser::CreateParams& params);
+Browser* CreateWebAppWindowMaybeWithHomeTab(const webapps::AppId& app_id,
+                                            BrowserWindowCreateParams params);
 
 // Report UMA metrics and updates  app's last launch time, site engagement
 // stats, etc.

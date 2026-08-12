@@ -1282,6 +1282,9 @@ ClientFrameElementInfo BrowserView::GetFrameElementInfo() const {
     info.toolbar_minimum_height =
         web_app_frame_toolbar_->GetMinimumSize().height();
   }
+  if (toolbar_ && IsToolbarVisible()) {
+    info.toolbar_preferred_height = toolbar_->GetPreferredSize().height();
+  }
   return info;
 }
 
@@ -4092,10 +4095,11 @@ bool BrowserView::GetSavedWindowPlacement(
 
     // Set a default popup origin if the x/y coordinates are 0 and the original
     // values were not known to be explicitly specified via window.open() in JS.
-    if (rect.origin().IsOrigin() && BrowserInitState::From(&*browser_)
-                                            ->create_params()
-                                            .initial_origin_specified !=
-                                        Browser::ValueSpecified::kSpecified) {
+    if (rect.origin().IsOrigin() &&
+        BrowserInitState::From(&*browser_)
+                ->create_params()
+                .initial_origin_specified !=
+            BrowserWindowCreateParams::ValueSpecified::kSpecified) {
       rect.set_origin(WindowSizer::GetDefaultPopupOrigin(rect.size()));
     }
 

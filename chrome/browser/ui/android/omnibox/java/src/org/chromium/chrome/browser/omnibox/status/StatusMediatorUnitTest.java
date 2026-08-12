@@ -77,7 +77,7 @@ import org.chromium.components.content_settings.CookieControlsBridgeJni;
 import org.chromium.components.favicon.LargeIconBridge;
 import org.chromium.components.favicon.LargeIconBridgeJni;
 import org.chromium.components.feature_engagement.Tracker;
-import org.chromium.components.metrics.OmniboxEventProtos.OmniboxEventProto.PageClassification;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
 import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteInput.AutocompleteState;
 import org.chromium.components.omnibox.AutocompleteInput.SiteSearchData;
@@ -250,7 +250,7 @@ public final class StatusMediatorUnitTest {
     @Test
     @SmallTest
     public void searchEngineLogo_contextualTasksFusebox_evenWhenNtp() {
-        doReturn(PageClassification.CO_BROWSING_COMPOSEBOX_VALUE)
+        doReturn(PageClassification.CO_BROWSING_COMPOSEBOX)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         doReturn(true).when(mNewTabPageDelegate).isCurrentlyVisible();
@@ -442,6 +442,8 @@ public final class StatusMediatorUnitTest {
                 mContext.getColor(R.color.locationbar_status_preview_color_dark),
                 mModel.get(StatusProperties.VERBOSE_STATUS_TEXT_COLOR));
 
+        mModel.set(StatusProperties.STATUS_CLICK_LISTENER, (v) -> {});
+        mMediator.setBackground();
         assertNotNull(mModel.get(StatusProperties.STATUS_VIEW_BACKGROUND));
 
         // When only offline is enabled, it should be shown.
@@ -468,7 +470,7 @@ public final class StatusMediatorUnitTest {
     @SmallTest
     public void testStatusIconAccessibility_hubSearch() {
         // Test default behaviour first.
-        doReturn(PageClassification.NTP_VALUE)
+        doReturn(PageClassification.NTP)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.updateLocationBarIcon(IconTransitionType.CROSSFADE);
@@ -476,7 +478,7 @@ public final class StatusMediatorUnitTest {
                 R.string.accessibility_toolbar_view_site_info,
                 mModel.get(StatusProperties.STATUS_ACCESSIBILITY_DOUBLE_TAP_DESCRIPTION_RES));
 
-        doReturn(PageClassification.ANDROID_HUB_VALUE)
+        doReturn(PageClassification.ANDROID_HUB)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.updateLocationBarIcon(IconTransitionType.CROSSFADE);
@@ -495,7 +497,7 @@ public final class StatusMediatorUnitTest {
     @SmallTest
     public void testStatusIconAccessibility_tabSearchOverlay() {
         // Test default behaviour first.
-        doReturn(PageClassification.NTP_VALUE)
+        doReturn(PageClassification.NTP)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.updateLocationBarIcon(IconTransitionType.CROSSFADE);
@@ -503,7 +505,7 @@ public final class StatusMediatorUnitTest {
                 R.string.accessibility_toolbar_view_site_info,
                 mModel.get(StatusProperties.STATUS_ACCESSIBILITY_DOUBLE_TAP_DESCRIPTION_RES));
 
-        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY_VALUE)
+        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.updateLocationBarIcon(IconTransitionType.CROSSFADE);
@@ -522,7 +524,7 @@ public final class StatusMediatorUnitTest {
     @SmallTest
     @EnableFeatures(OmniboxFeatureList.EXACT_MATCH_FAVICONS)
     public void testStatusIcon_hubSearchWithExactMatchFaviconEnabled() {
-        doReturn(PageClassification.ANDROID_HUB_VALUE)
+        doReturn(PageClassification.ANDROID_HUB)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mPreviewMatchUrlSupplier.set(JUnitTestGURLs.BLUE_1);
@@ -537,7 +539,7 @@ public final class StatusMediatorUnitTest {
     @SmallTest
     @EnableFeatures(OmniboxFeatureList.EXACT_MATCH_FAVICONS)
     public void testStatusIcon_tabSearchOverlayWithExactMatchFaviconEnabled() {
-        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY_VALUE)
+        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mPreviewMatchUrlSupplier.set(JUnitTestGURLs.BLUE_1);
@@ -551,7 +553,7 @@ public final class StatusMediatorUnitTest {
     @Test
     @SmallTest
     public void testStatusIconOverride_hubSearch() {
-        doReturn(PageClassification.ANDROID_HUB_VALUE)
+        doReturn(PageClassification.ANDROID_HUB)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.setDefaultStatusIconOverrideResId(R.drawable.ic_suggestion_magnifier);
@@ -569,7 +571,7 @@ public final class StatusMediatorUnitTest {
     @Test
     @SmallTest
     public void testStatusIconOverride_tabSearchOverlay() {
-        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY_VALUE)
+        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.setDefaultStatusIconOverrideResId(R.drawable.ic_suggestion_magnifier);
@@ -587,7 +589,7 @@ public final class StatusMediatorUnitTest {
     @Test
     @SmallTest
     public void testWideIconTrue_hubSearch() {
-        doReturn(PageClassification.ANDROID_HUB_VALUE)
+        doReturn(PageClassification.ANDROID_HUB)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
 
@@ -597,25 +599,30 @@ public final class StatusMediatorUnitTest {
 
     @Test
     @SmallTest
-    public void testWideIconFalse_tabSearchOverlay() {
-        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY_VALUE)
+    public void testWideIconTrue_tabSearchOverlay() {
+        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
 
         mMediator.beginInput(mFuseboxSessionState);
-        assertFalse(mModel.get(StatusProperties.USE_WIDE_STATUS_ICON));
+        assertTrue(mModel.get(StatusProperties.USE_WIDE_STATUS_ICON));
     }
 
     @Test
     @SmallTest
     @DisableFeatures(ChromeFeatureList.ANDROID_PAGE_INFO_AS_APP_MENU_ITEM)
     public void testSetTooltipText() {
-        doReturn(PageClassification.NTP_VALUE)
+        doReturn(PageClassification.NTP)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
 
+        mMediator.setStatusClickListener(null);
         mMediator.setTooltipText(Resources.ID_NULL);
-        // Assert that the below accessibility string is always set when #setTooltipText is called.
+        // If there is no registered click listener, the tooltip text should be null.
+        assertEquals(Resources.ID_NULL, mModel.get(StatusProperties.STATUS_VIEW_TOOLTIP_TEXT));
+
+        mMediator.setStatusClickListener((v) -> {});
+        mMediator.setTooltipText(Resources.ID_NULL);
         assertEquals(
                 R.string.accessibility_menu_info,
                 mModel.get(StatusProperties.STATUS_VIEW_TOOLTIP_TEXT));
@@ -625,7 +632,7 @@ public final class StatusMediatorUnitTest {
     @SmallTest
     @EnableFeatures({ChromeFeatureList.ANDROID_PAGE_INFO_AS_APP_MENU_ITEM})
     public void testSetTooltipText_whenPageInfoMovedToAppMenu() {
-        doReturn(PageClassification.NTP_VALUE)
+        doReturn(PageClassification.NTP)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
 
@@ -637,12 +644,17 @@ public final class StatusMediatorUnitTest {
     @SmallTest
     @DisableFeatures(ChromeFeatureList.ANDROID_PAGE_INFO_AS_APP_MENU_ITEM)
     public void testSetBackground() {
-        doReturn(PageClassification.NTP_VALUE)
+        doReturn(PageClassification.NTP)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
 
+        // When no click listener is set, background is null.
         mMediator.setBackground();
-        // Assert that the non verbose drawable is always set when #setBackground is called.
+        assertNull(mModel.get(StatusProperties.STATUS_VIEW_BACKGROUND));
+
+        // When a click listener is set, background is set.
+        mModel.set(StatusProperties.STATUS_CLICK_LISTENER, (v) -> {});
+        mMediator.setBackground();
         assertNotNull(mModel.get(StatusProperties.STATUS_VIEW_BACKGROUND));
     }
 
@@ -650,7 +662,7 @@ public final class StatusMediatorUnitTest {
     @SmallTest
     @EnableFeatures({ChromeFeatureList.ANDROID_PAGE_INFO_AS_APP_MENU_ITEM})
     public void testSetBackground_whenPageInfoMovedToAppMenu() {
-        doReturn(PageClassification.NTP_VALUE)
+        doReturn(PageClassification.NTP)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.updateVerboseStatus(ConnectionSecurityLevel.WARNING, false, false);
@@ -926,7 +938,7 @@ public final class StatusMediatorUnitTest {
     @Test
     @SmallTest
     public void testStatusClickListener_withBackButtonPressListener() {
-        doReturn(PageClassification.ANDROID_HUB_VALUE)
+        doReturn(PageClassification.ANDROID_HUB)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.setOnStatusIconNavigateBackButtonPress(mOnClickListener);
@@ -939,7 +951,7 @@ public final class StatusMediatorUnitTest {
     @Test
     @SmallTest
     public void testStatusClickListener_withBackButtonPressListener_tabSearchOverlay() {
-        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY_VALUE)
+        doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.setOnStatusIconNavigateBackButtonPress(mOnClickListener);
@@ -1379,7 +1391,7 @@ public final class StatusMediatorUnitTest {
     @Test
     @SmallTest
     public void testHover_enabledWhenClickListenerSet() {
-        doReturn(PageClassification.ANDROID_HUB_VALUE)
+        doReturn(PageClassification.ANDROID_HUB)
                 .when(mLocationBarDataProvider)
                 .getPageClassification(/* prefetch= */ false);
         mMediator.setOnStatusIconNavigateBackButtonPress(mOnClickListener);

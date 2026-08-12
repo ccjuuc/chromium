@@ -42,7 +42,8 @@ suite(`NewTabPageComposeboxTest`, () => {
     testProxy.element.searchboxLayoutMode = 'Compact';
     await microtasksFinished();
 
-    testProxy.element.getInputElement().$.input.value = 'test';
+    (testProxy.element.getInputElement().$.input as HTMLTextAreaElement).value =
+        'test';
     testProxy.element.getInputElement().$.input.dispatchEvent(
         new Event('input'));
     await microtasksFinished();
@@ -59,7 +60,8 @@ suite(`NewTabPageComposeboxTest`, () => {
     testProxy.element.searchboxLayoutMode = 'Compact';
     await microtasksFinished();
 
-    testProxy.element.getInputElement().$.input.value = 'test';
+    (testProxy.element.getInputElement().$.input as HTMLTextAreaElement).value =
+        'test';
     testProxy.element.getInputElement().$.input.dispatchEvent(
         new Event('input'));
     await microtasksFinished();
@@ -108,7 +110,8 @@ suite(`NewTabPageComposeboxTest`, () => {
             'cr-composebox-submit'));
 
         // Add input and files.
-        testProxy.element.getInputElement().$.input.value = 'test';
+        (testProxy.element.getInputElement().$.input as HTMLTextAreaElement)
+            .value = 'test';
         testProxy.element.getInputElement().$.input.dispatchEvent(
             new Event('input'));
         const dataTransfer = new DataTransfer();
@@ -230,7 +233,8 @@ suite(`NewTabPageComposeboxTest`, () => {
           searchboxNextEnabled: true,
         });
         testProxy.element.searchboxLayoutMode = 'Compact';
-        testProxy.element.getInputElement().$.input.value = 'test';
+        (testProxy.element.getInputElement().$.input as HTMLTextAreaElement)
+            .value = 'test';
         testProxy.element.getInputElement().$.input.dispatchEvent(
             new Event('input'));
         await microtasksFinished();
@@ -248,7 +252,8 @@ suite(`NewTabPageComposeboxTest`, () => {
           searchboxNextEnabled: true,
         });
         testProxy.element.searchboxLayoutMode = 'Compact';
-        testProxy.element.getInputElement().$.input.value = '';
+        (testProxy.element.getInputElement().$.input as HTMLTextAreaElement)
+            .value = '';
         testProxy.element.getInputElement().$.input.dispatchEvent(
             new Event('input'));
         await microtasksFinished();
@@ -270,7 +275,8 @@ suite(`NewTabPageComposeboxTest`, () => {
         testProxy.searchboxHandler.getCallCount('openAutocompleteMatch'), 0);
 
     // Arrange.
-    testProxy.element.getInputElement().$.input.value = 'test';
+    (testProxy.element.getInputElement().$.input as HTMLTextAreaElement).value =
+        'test';
     testProxy.element.getInputElement().$.input.dispatchEvent(
         new Event('input'));
     const matches =
@@ -302,7 +308,8 @@ suite(`NewTabPageComposeboxTest`, () => {
         testProxy.searchboxHandler.getCallCount('openAutocompleteMatch'), 0);
 
     // Arrange.
-    testProxy.element.getInputElement().$.input.value = 'test';
+    (testProxy.element.getInputElement().$.input as HTMLTextAreaElement).value =
+        'test';
     testProxy.element.getInputElement().$.input.dispatchEvent(
         new Event('input'));
     const matches =
@@ -889,7 +896,7 @@ suite(`NewTabPageComposeboxTest`, () => {
           imageInputClicked = true;
         });
 
-        composebox.handleFuseboxAction({
+        await composebox.handleFuseboxAction({
           preselectedTool: null,
           preferredInventory: null,
           preselectedModel: null,
@@ -917,7 +924,7 @@ suite(`NewTabPageComposeboxTest`, () => {
           fileInputClicked = true;
         });
 
-        composebox.handleFuseboxAction({
+        await composebox.handleFuseboxAction({
           preselectedTool: null,
           preferredInventory: null,
           preselectedModel: null,
@@ -927,6 +934,26 @@ suite(`NewTabPageComposeboxTest`, () => {
         });
 
         assertTrue(fileInputClicked);
+      });
+
+  test(
+      'handleFuseboxAction opens tab picker for kInputSourceTabPicker',
+      async () => {
+        const composebox = new NtpComposeboxElement();
+        composebox.contextMenuEnabled = true;
+        document.body.appendChild(composebox);
+        await microtasksFinished();
+
+        await composebox.handleFuseboxAction({
+          preselectedTool: null,
+          preferredInventory: null,
+          preselectedModel: null,
+          queryActionOverride: null,
+          preselectedInputSource: InputSource.kInputSourceTabPicker,
+          searchboxOverride: null,
+        });
+
+        assertTrue(composebox.shareTabsFlyoutOpen);
       });
 });
 

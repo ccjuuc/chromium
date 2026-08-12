@@ -36,11 +36,6 @@ BASE_FEATURE(kDebugTopChromeWebUI, base::FEATURE_DISABLED_BY_DEFAULT);
 // IME sends composition texts.
 BASE_FEATURE(kAndroidCaptureKeyEvents, base::FEATURE_ENABLED_BY_DEFAULT);
 
-#if BUILDFLAG(IS_MAC)
-// Enables Aperitif helper executables.
-BASE_FEATURE(kAperitifHelpers, base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
 // DevTools frontend for Android.
 BASE_FEATURE(kAndroidDevToolsFrontend, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -252,6 +247,11 @@ BASE_FEATURE(kClearCrossSiteCrossBrowsingContextGroupWindowName,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kCompositeBGColorAnimation, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Defer Session Storage scavenging to avoid LevelDB initialization blocking
+// the critical path of startup.
+BASE_FEATURE(kDeferSessionStorageScavengingOnStartup,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables deferring the creation of the speculative RFH when the navigation
 // starts. The creation of a speculative RFH consumes about 2ms and is blocking

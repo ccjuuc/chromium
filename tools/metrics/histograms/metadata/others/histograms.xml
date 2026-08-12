@@ -819,7 +819,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="DirectSockets.TCPReadableStreamError" enum="NetErrorCodes"
-    expires_after="2026-10-04">
+    expires_after="2027-02-07">
   <owner>greengrape@google.com</owner>
   <owner>iwa-team@google.com</owner>
   <summary>How often tcp socket readable stream is errored.</summary>
@@ -884,7 +884,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="DocumentEventTiming.BeforeUnloadDialogDuration.ByNavigation"
-    units="ms" expires_after="2026-12-01">
+    units="ms" expires_after="2027-02-07">
   <owner>sullivan@chromium.org</owner>
   <owner>chikamune@chromium.org</owner>
   <summary>
@@ -1583,7 +1583,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Feedback.HappinessTrackingSurvey.ShouldShowSurveyReason"
     enum="HappinessTrackingSurveyShouldShowSurveyReasons"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>sauski@google.com</owner>
   <owner>msramek@chromium.org</owner>
   <summary>
@@ -1594,7 +1594,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Feedback.HappinessTrackingSurvey.SurveyCompleted"
-    enum="Boolean" expires_after="2026-11-29">
+    enum="Boolean" expires_after="2027-02-07">
   <owner>ravjit@google.com</owner>
   <owner>msramek@google.com</owner>
   <summary>
@@ -1604,7 +1604,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Feedback.HappinessTrackingSurvey.{SurveyName}"
-    enum="HappinessTrackingSurvey" expires_after="2026-11-29">
+    enum="HappinessTrackingSurvey" expires_after="2027-02-07">
   <owner>zhouzj@google.com</owner>
   <owner>msramek@google.com</owner>
   <summary>
@@ -1691,7 +1691,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Feedback.ReportSending.Online" enum="Boolean"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>xiangdongkong@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1700,7 +1700,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Feedback.ReportSending.Result"
-    enum="FeedbackReportSendingResult" expires_after="2026-11-29">
+    enum="FeedbackReportSendingResult" expires_after="2027-02-07">
   <owner>xiangdongkong@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1845,7 +1845,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="FetchKeepAlive.Requests2.{RequestState}.{Process}"
-    enum="FetchKeepAliveRequestMetricType" expires_after="2026-11-29">
+    enum="FetchKeepAliveRequestMetricType" expires_after="2027-02-07">
   <owner>mych@chromium.org</owner>
   <owner>chrome-bfcache@google.com</owner>
   <summary>
@@ -2481,7 +2481,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImportantFile.FileReplaceResult{ImportantFileClients}"
-    enum="ImportantFileReplaceResult" expires_after="2026-11-29">
+    enum="ImportantFileReplaceResult" expires_after="2027-02-07">
   <owner>etienneb@chromium.org</owner>
   <owner>joenotcharles@google.com</owner>
   <summary>
@@ -2507,7 +2507,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImportantFile.FileReplaceRetryCount2{ImportantFileClients}"
-    units="attempt count" expires_after="2026-11-29">
+    units="attempt count" expires_after="2027-02-07">
   <owner>etienneb@chromium.org</owner>
   <owner>joenotcharles@google.com</owner>
   <summary>
@@ -2521,8 +2521,24 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="ImportantFile.MissingFileRestoreResult{ImportantFileClients}"
+    enum="MissingFileRestoreResult" expires_after="2027-07-08">
+  <owner>grt@chromium.org</owner>
+  <owner>tingshao@microsoft.com</owner>
+  <summary>
+    The result of attempting to restore a missing important file (e.g. a
+    preferences file) from a leftover temporary file previously written by
+    ImportantFileWriter. Recorded only when the target file is missing at read
+    time, from ImportantFileWriter::RestoreMissingFileIfNeeded(). Note that a
+    &quot;restored&quot; result only means that a leftover temporary file was
+    moved into place. It doesn't mean that data was recovered from that file.
+
+    {ImportantFileClients}
+  </summary>
+</histogram>
+
 <histogram name="ImportantFile.SerializationDuration{ImportantFileClients}"
-    units="ms" expires_after="2026-11-29">
+    units="ms" expires_after="2027-02-07">
   <owner>battre@chromium.org</owner>
   <owner>gab@chromium.org</owner>
   <summary>
@@ -2537,7 +2553,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImportantFile.SerializationSize{ImportantFileClients}"
-    units="bytes" expires_after="2026-11-29">
+    units="bytes" expires_after="2027-02-07">
   <owner>asvitkine@chromium.org</owner>
   <owner>chrome-metrics-team@google.com</owner>
   <summary>
@@ -2552,7 +2568,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImportantFile.WriteDuration{ImportantFileClients}" units="ms"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>wylieb@google.com</owner>
   <owner>chrome-collections@google.com</owner>
   <summary>
@@ -2702,7 +2718,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="LoadingPredictor.SetLCPPNavigationHint.Time" units="ms"
-    expires_after="2026-12-01">
+    expires_after="2027-02-07">
   <owner>chikamune@chromium.org</owner>
   <owner>chrome-loading@google.com</owner>
   <improvement direction="LOWER_IS_BETTER"/>
@@ -2844,7 +2860,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Mojo.Channel.WriteToReadLatencyUs" units="microseconds"
-    expires_after="2026-12-06">
+    expires_after="2027-02-07">
   <owner>lizeb@chromium.org</owner>
   <owner>rockot@google.com</owner>
   <improvement direction="LOWER_IS_BETTER"/>
@@ -2884,7 +2900,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Mojo.DirectReceiver.AdoptPipeResult"
-    enum="MojoAdoptPipeResult" expires_after="2026-11-29">
+    enum="MojoAdoptPipeResult" expires_after="2027-02-07">
   <owner>joenotcharles@google.com</owner>
   <owner>pasko@chromium.org</owner>
   <summary>
@@ -2897,7 +2913,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Mojo.DirectReceiver.MergePortalsResult"
-    enum="MojoMergePortalsResult" expires_after="2026-11-29">
+    enum="MojoMergePortalsResult" expires_after="2027-02-07">
   <owner>joenotcharles@google.com</owner>
   <owner>pasko@chromium.org</owner>
   <summary>
@@ -2957,7 +2973,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="MPArch.ChildProcessLauncher.{Event}" units="ms"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>ajgo@chromium.org</owner>
   <owner>src/sandbox/policy/win/OWNERS</owner>
   <summary>
@@ -2977,7 +2993,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="MPArch.ChildProcessLaunchFirst" units="ms"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>pasko@chromium.org</owner>
   <owner>yfriedman@chromium.org</owner>
   <improvement direction="LOWER_IS_BETTER"/>
@@ -3038,7 +3054,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NQE.Duration.{MethodName}" units="ms"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>suzukikeita@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -3817,7 +3833,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Process.Sandbox.StartSandboxedWin.{Event}Duration"
-    units="microseconds" expires_after="2026-11-29">
+    units="microseconds" expires_after="2027-02-07">
   <owner>ajgo@chromium.org</owner>
   <owner>src/sandbox/policy/win/OWNERS</owner>
   <summary>
@@ -3993,7 +4009,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ReadingList.Read.Number" units="count"
-    expires_after="2026-12-06">
+    expires_after="2027-02-07">
   <owner>gambard@chromium.org</owner>
   <owner>bling-team@google.com</owner>
   <summary>Number of read entries in reading list.</summary>
@@ -4037,7 +4053,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ReadingList.{ReadStatus}.Count.{RecordedAt}.{StorageState}"
-    units="count" expires_after="2026-11-29">
+    units="count" expires_after="2027-02-07">
   <owner>mastiz@chromium.org</owner>
   <owner>mmrashad@google.com</owner>
   <owner>treib@chromium.org</owner>
@@ -5594,7 +5610,7 @@ should be kept until we use this API.  -->
 </histogram>
 
 <histogram name="UpdateClient.UnzipTime{AppID}" units="ms"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>noahrose@google.com</owner>
   <owner>sorin@chromium.org</owner>
   <summary>
@@ -5888,7 +5904,7 @@ regressions. -->
 </histogram>
 
 <histogram name="VoiceInteraction.StartEventSource"
-    enum="VoiceInteractionEventSource" expires_after="2026-12-06">
+    enum="VoiceInteractionEventSource" expires_after="2027-02-07">
   <owner>basiaz@google.com</owner>
   <owner>chrome-language@google.com</owner>
   <summary>
@@ -5911,7 +5927,7 @@ regressions. -->
 </histogram>
 
 <histogram name="VoiceInteraction.VoiceSearchResult" enum="BooleanSuccess"
-    expires_after="2026-12-06">
+    expires_after="2027-02-07">
   <owner>basiaz@google.com</owner>
   <owner>chrome-language@google.com</owner>
   <summary>
@@ -5921,7 +5937,7 @@ regressions. -->
 </histogram>
 
 <histogram name="WebContentsObserver.{Method}{FrameType}" units="ms"
-    expires_after="2026-11-29">
+    expires_after="2027-02-07">
   <owner>cduvall@chromium.org</owner>
   <owner>sisidovski@chromium.org</owner>
   <owner>chrome-loading@google.com</owner>
@@ -6030,7 +6046,7 @@ regressions. -->
 </histogram>
 
 <histogram name="WebShare.SafeBrowsingCheck.Result"
-    enum="WebShareSafeBrowsingCheckResult" expires_after="2026-11-22">
+    enum="WebShareSafeBrowsingCheckResult" expires_after="2027-02-07">
   <owner>thefrog@chromium.org</owner>
   <owner>chrome-counter-abuse-alerts@google.com</owner>
   <summary>

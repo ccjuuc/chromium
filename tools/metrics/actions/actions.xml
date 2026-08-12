@@ -16260,6 +16260,14 @@ should be able to be added at any place in this file.
   <description>The Glic instance WebUI is warmed.</description>
 </action>
 
+<action name="Glic.Interaction.TabStripButton.UndoUnpin">
+  <owner>mklw@google.com</owner>
+  <description>
+    User tapped 'Undo' on the snackbar to undo unpinning the Glic button from
+    the tab strip.
+  </description>
+</action>
+
 <action name="Glic.Interaction.TabStripButton.UnpinnedInContextMenu">
   <owner>mklw@google.com</owner>
   <description>
@@ -17521,7 +17529,30 @@ should be able to be added at any place in this file.
   </description>
 </action>
 
+<action name="Indigo.PageAction.AnchoredMessage.Proactive.Show"
+    not_user_triggered="true">
+  <owner>jbroman@chromium.org</owner>
+  <owner>adithyas@chromium.org</owner>
+  <owner>baranerf@google.com</owner>
+  <description>
+    The indigo page action was displayed as a proactive anchored message.
+  </description>
+</action>
+
+<action name="Indigo.PageAction.AnchoredMessage.Reactive.Show">
+  <owner>jbroman@chromium.org</owner>
+  <owner>adithyas@chromium.org</owner>
+  <owner>baranerf@google.com</owner>
+  <description>
+    The indigo page action was displayed as a reactive anchored message.
+  </description>
+</action>
+
 <action name="Indigo.PageAction.Click">
+  <obsolete>
+    Deprecated M152. Replaced by Indigo.PageAction.SuggestionChip.Click and
+    Indigo.PageAction.AnchoredMessage.Click.
+  </obsolete>
   <owner>jbroman@chromium.org</owner>
   <owner>adithyas@chromium.org</owner>
   <owner>baranerf@google.com</owner>
@@ -17529,6 +17560,12 @@ should be able to be added at any place in this file.
 </action>
 
 <action name="Indigo.PageAction.Show" not_user_triggered="true">
+  <obsolete>
+    Deprecated M152. Replaced by
+    Indigo.PageAction.AnchoredMessage.Proactive.Show,
+    Indigo.PageAction.AnchoredMessage.Reactive.Show, and
+    Indigo.PageAction.SuggestionChip.Show.
+  </obsolete>
   <owner>jbroman@chromium.org</owner>
   <owner>adithyas@chromium.org</owner>
   <owner>baranerf@google.com</owner>
@@ -17536,6 +17573,11 @@ should be able to be added at any place in this file.
 </action>
 
 <action name="Indigo.PageAction.ShowAnchoredMessage" not_user_triggered="true">
+  <obsolete>
+    Deprecated M152. Replaced by
+    Indigo.PageAction.AnchoredMessage.Proactive.Show and
+    Indigo.PageAction.AnchoredMessage.Reactive.Show.
+  </obsolete>
   <owner>jbroman@chromium.org</owner>
   <owner>adithyas@chromium.org</owner>
   <owner>baranerf@google.com</owner>
@@ -17551,6 +17593,22 @@ should be able to be added at any place in this file.
   <description>
     User clicked the Indigo page action from a suggestion chip.
   </description>
+</action>
+
+<action name="Indigo.PageAction.SuggestionChip.Show" not_user_triggered="true">
+  <owner>jbroman@chromium.org</owner>
+  <owner>adithyas@chromium.org</owner>
+  <owner>baranerf@google.com</owner>
+  <description>
+    The indigo page action was displayed as a suggestion chip.
+  </description>
+</action>
+
+<action name="Indigo.Regenerate.Trigger">
+  <owner>jbroman@chromium.org</owner>
+  <owner>adithyas@chromium.org</owner>
+  <owner>baranerf@google.com</owner>
+  <description>User triggered the regenerate image flow.</description>
 </action>
 
 <action name="Indigo.ReplaceImage.Complete">
@@ -28438,6 +28496,24 @@ should be able to be added at any place in this file.
   </description>
 </action>
 
+<action name="MobileGeminiActiveTabAttached">
+  <owner>joepeplowski@google.com</owner>
+  <owner>bling-alchemy-eng@google.com</owner>
+  <description>
+    Reported when the active tab is attached by the user via a Floaty chip (e.g.
+    'Ask about this page') in a Gemini session. iOS only.
+  </description>
+</action>
+
+<action name="MobileGeminiActiveTabDetached">
+  <owner>joepeplowski@google.com</owner>
+  <owner>bling-alchemy-eng@google.com</owner>
+  <description>
+    Reported when the active tab is detached by the user via a Floaty chip in a
+    Gemini session. iOS only.
+  </description>
+</action>
+
 <action name="MobileGeminiCameraFlowBegan">
   <owner>joepeplowski@google.com</owner>
   <owner>bling-alchemy-eng@google.com</owner>
@@ -28947,11 +29023,47 @@ should be able to be added at any place in this file.
   </description>
 </action>
 
+<action name="MobileGeminiTabDetached">
+  <owner>joepeplowski@google.com</owner>
+  <owner>bling-alchemy-eng@google.com</owner>
+  <description>
+    Reported when a shared (non-active) tab is detached by the user from a
+    Floaty chip in a Gemini session. iOS only.
+  </description>
+</action>
+
 <action name="MobileGeminiTabPickerDismissed">
   <owner>joepeplowski@google.com</owner>
   <owner>bling-alchemy@google.com</owner>
   <description>
     Reported when the Tab Picker UI is dismissed in a Gemini session. iOS only.
+  </description>
+</action>
+
+<action name="MobileGeminiTabPickerErrorAttachmentLimit">
+  <owner>joepeplowski@google.com</owner>
+  <owner>bling-alchemy-eng@google.com</owner>
+  <description>
+    Reported when a snackbar error is shown due to the user trying to attach
+    more tabs than the limit in the Tab Picker in a Gemini session. iOS only.
+  </description>
+</action>
+
+<action name="MobileGeminiTabPickerErrorCannotAttachTab">
+  <owner>joepeplowski@google.com</owner>
+  <owner>bling-alchemy-eng@google.com</owner>
+  <description>
+    Reported when a snackbar error is shown due to the user attempting to attach
+    an ineligible tab in the Tab Picker in a Gemini session. iOS only.
+  </description>
+</action>
+
+<action name="MobileGeminiTabPickerErrorCannotReloadTab">
+  <owner>joepeplowski@google.com</owner>
+  <owner>bling-alchemy-eng@google.com</owner>
+  <description>
+    Reported when a snackbar error is shown due to a tab failing to reload in
+    the Tab Picker in a Gemini session. iOS only.
   </description>
 </action>
 
@@ -29085,6 +29197,14 @@ should be able to be added at any place in this file.
   <owner>gambard@chromium.org</owner>
   <description>
     User confirmed provided credentials in HTTP Authentication dialog. iOS only.
+  </description>
+</action>
+
+<action name="MobileHubExitViaButton">
+  <owner>polardz@google.com</owner>
+  <owner>clank-tab-dev@google.com</owner>
+  <description>
+    User exited the Hub (Grid Tab Switcher) by clicking the tab switcher button.
   </description>
 </action>
 
@@ -43277,6 +43397,15 @@ should be able to be added at any place in this file.
   </description>
 </action>
 
+<action name="Settings.OpenDefaultBrowserFromPassiveCell">
+  <owner>cheickcisse@google.com</owner>
+  <owner>bling-mony-pod@google.com</owner>
+  <description>
+    Reported when user opens the Default Browser Settings page from the Default
+    Browser Passive cell promo.
+  </description>
+</action>
+
 <action name="Settings.Privacy">
   <owner>thgreenfrog@chromium.org</owner>
   <owner>sczs@chromium.org</owner>
@@ -46587,6 +46716,15 @@ should be able to be added at any place in this file.
   <owner>chrome-signin-mobile-team@google.com</owner>
   <description>
     Recorded when the user signes out from the account menu. iOS only.
+  </description>
+</action>
+
+<action name="Signin_AccountMenu_SubscriptionChip">
+  <owner>arthurmilchior@chromium.org</owner>
+  <owner>chrome-signin-mobile-team@google.com</owner>
+  <description>
+    Recorded when the user taps on the AI subscription chip in the account menu.
+    iOS only.
   </description>
 </action>
 

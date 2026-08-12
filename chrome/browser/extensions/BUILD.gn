@@ -2403,6 +2403,7 @@ source_set("browser_tests") {
     "extension_bindings_apitest.cc",
     "extension_bookmarklet_browsertest.cc",
     "extension_browsertest_browsertest.cc",
+    "extension_context_menu_model_browsertest.cc",
     "extension_cookies_browsertest.cc",
     "extension_csp_bypass_browsertest.cc",
     "extension_dom_apitest.cc",
@@ -2540,6 +2541,7 @@ source_set("browser_tests") {
     "//components/embedder_support",
     "//components/enterprise:test_support",
     "//components/enterprise/browser/promotion",
+    "//components/enterprise/device_trust/core:device_trust_service",
     "//components/infobars/content",
     "//components/javascript_dialogs",
     "//components/media_device_salt",
@@ -2750,7 +2752,6 @@ source_set("browser_tests") {
       "crx_installer_browsertest.cc",
       "event_metrics_browsertest.cc",
       "events_apitest.cc",
-      "extension_context_menu_model_browsertest.cc",
       "extension_disabled_ui_browsertest.cc",
       "extension_fileapi_apitest.cc",
       "extension_get_views_apitest.cc",
@@ -2878,13 +2879,13 @@ source_set("browser_tests") {
 
       deps += [
         "//chrome/browser/enterprise/connectors/device_trust:features",
-        "//chrome/browser/enterprise/connectors/device_trust/common",
         "//chrome/browser/enterprise/connectors/device_trust/test:test_support",
         "//chrome/browser/enterprise/network_header_injection:browser_tests",
         "//components/device_signals/core/common",
         "//components/device_signals/core/common:features",
         "//components/device_signals/test:test_support",
         "//components/enterprise/connectors/core",
+        "//components/enterprise/device_trust/core:metrics",
       ]
     }
 

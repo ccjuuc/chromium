@@ -57,7 +57,6 @@
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/permissions/features.h"
-#include "components/plus_addresses/core/common/features.h"
 #include "components/policy/core/common/features.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/push_messaging/push_messaging_features.h"
@@ -122,6 +121,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
     &autofill::features::kAutofillAiReauthRequired,
     &autofill::features::kAutofillAiShowDialogInSettingsWhenUpstreamingFails,
     &autofill::features::kAutofillAiShowWalletDisabledBanner,
+    &autofill::features::kAutofillAiUseMaterialDatePickerInEntityEditor,
     &autofill::features::kAutofillAiUsePrivateAi,
     &autofill::features::kAutofillAiWalletPrivatePassesDeepLink,
     &autofill::features::kAutofillAiWalletShopping,
@@ -352,7 +352,6 @@ const base::Feature* const kFeaturesExposedToJava[] = {
     &kDeferNavigationStateChanged,
     &kDesktopAndroidLinkCapturing,
     &kDesktopUAOnConnectedDisplay,
-    &kDialogsOnLargeFormFactors,
     &kDisablePartnerHomepageAndroid,
     &kDisableScrollbarOfFadingEdgeScrollView,
     &kDontAutoHideBrowserControls,
@@ -539,8 +538,6 @@ const base::Feature* const kFeaturesExposedToJava[] = {
     &permissions::features::kAndroidWindowManagementWebApi,
     &permissions::features::kPermissionDedicatedCpssSettingAndroid,
     &permissions::features::kPermissionsPromptSurvey,
-    &plus_addresses::features::kPlusAddressAndroidOpenGmsCoreManagementPage,
-    &plus_addresses::features::kPlusAddressesEnabled,
     &privacy_sandbox::kPrivacySandboxAdPrivacyUxDeprecation,
     &privacy_sandbox::kRelatedWebsiteSetsUi,
     &safe_browsing::kAutoRevokeSuspiciousNotification,
@@ -726,7 +723,7 @@ BASE_FEATURE(kChromeItemPickerUi, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kChromeNativeUrlOverriding, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kChromeSurveyNextAndroid, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kClampAutomotiveScaling, base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kClankGlicContextMenu, BUILDFLAG(IS_DESKTOP_ANDROID) ? base::FEATURE_ENABLED_BY_DEFAULT : base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kClankGlicContextMenu, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kClankStartupLatencyInjection, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kClankWhatsNew, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kClearIntentWhenRecreated, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -748,7 +745,6 @@ BASE_FEATURE(kDefaultBrowserPromoFre, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kDeferNavigationStateChanged, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kDesktopAndroidLinkCapturing, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kDesktopUAOnConnectedDisplay, base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kDialogsOnLargeFormFactors, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kDisablePartnerHomepageAndroid, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kDisableScrollbarOfFadingEdgeScrollView, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kDiscardPageWithCrashedSubframePolicy, base::FEATURE_ENABLED_BY_DEFAULT);

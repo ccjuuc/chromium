@@ -274,7 +274,9 @@ class AtMemoryManagerTest : public Test,
     return {form.global_id(), form.fields()[0].global_id()};
   }
 
-  AtMemoryManager& manager() { return autofill_manager().GetAtMemoryManager(); }
+  AtMemoryManager& manager() {
+    return CHECK_DEREF(autofill_client().GetAtMemoryManager());
+  }
 
   MockAtMemoryQueryService& mock_query_service() {
     return *mock_query_service_ptr_;
@@ -1767,7 +1769,7 @@ TEST_P(AtMemoryManagerPolicyTest, RespectsEnterprisePolicy) {
     EXPECT_EQ(resulting_suggestions[0].type,
               SuggestionType::kAtMemorySearchResult);
     EXPECT_EQ(resulting_suggestions[0].acceptability,
-              Suggestion::Acceptability::kSelectableButUnacceptable);
+              Suggestion::Acceptability::kUnselectableAndUnacceptable);
   }
 }
 
@@ -1837,7 +1839,7 @@ TEST_P(AtMemoryManagerPrefTest, FiltersOutCreditCardsWhenPrefDisabled) {
     EXPECT_EQ(resulting_suggestions[0].type,
               SuggestionType::kAtMemorySearchResult);
     EXPECT_EQ(resulting_suggestions[0].acceptability,
-              Suggestion::Acceptability::kSelectableButUnacceptable);
+              Suggestion::Acceptability::kUnselectableAndUnacceptable);
   }
 }
 

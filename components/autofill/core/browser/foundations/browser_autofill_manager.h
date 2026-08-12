@@ -66,7 +66,6 @@ class AutofillProfile;
 class CreditCard;
 class CreditCardAccessManager;
 class AutofillAiAccessManager;
-class AtMemoryManager;
 
 class FormData;
 class FormFieldData;
@@ -233,10 +232,6 @@ class BrowserAutofillManager : public AutofillManager {
 
   CreditCardAccessManager* GetCreditCardAccessManager() override;
   const CreditCardAccessManager* GetCreditCardAccessManager() const override;
-
-  // Gets the `AtMemoryManager` owned by `this`. This will be used to handle
-  // queries to the `AccessibilityQueryService`.
-  AtMemoryManager& GetAtMemoryManager();
 
   // Gets the Autofill AI access manager owned by `this`.
   virtual AutofillAiAccessManager& GetAutofillAiAccessManager();
@@ -528,6 +523,12 @@ class BrowserAutofillManager : public AutofillManager {
       const std::vector<Suggestion>& suggestions,
       AutofillSuggestionTriggerSource trigger_source);
 
+  // Shows the private inference notice on Android, if the list of suggestions
+  // has a private inference notice suggestion. The notice is shows as an
+  // message on android, unlike Desktop, where it's shown as a suggestion.
+  bool MaybeShowPrivateInferenceNotice(
+      base::span<const Suggestion> autofill_ai_suggestions);
+
   // Merges suggestions with `FillingProduct::kAddress` with the other
   // suggestions whose products supports merging with address suggestions (see
   // `kSupportedMerges` in `suggestion_generator.h` for more details).
@@ -707,10 +708,6 @@ class BrowserAutofillManager : public AutofillManager {
       std::make_unique<FormFiller>(*this);
 
   std::unique_ptr<OtpManager> otp_manager_;
-
-  // The `AtMemoryManager`, used to handle queries to the
-  // `AccessibilityQueryService` and manage session-based metrics.
-  std::unique_ptr<AtMemoryManager> at_memory_manager_;
 
   std::unique_ptr<AccountNameEmailStrikeManager>
       account_name_email_strike_manager_;

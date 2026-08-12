@@ -172,6 +172,30 @@ class FullWebUIOmniboxInteractiveTestBase
                  InAnyContext(WaitForWebUIInputValue(text)));
   }
 
+  auto CopyWebUIText() {
+    return Steps(InAnyContext(ExecuteJsAt(kPopupWebView, kWebUIInput, R"(el => {
+      el.select();
+      const event = new ClipboardEvent('copy', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      el.dispatchEvent(event);
+    })")));
+  }
+
+  auto CutWebUIText() {
+    return Steps(InAnyContext(ExecuteJsAt(kPopupWebView, kWebUIInput, R"(el => {
+      el.select();
+      const event = new ClipboardEvent('cut', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      el.dispatchEvent(event);
+    })")));
+  }
+
   auto ClearWebUIText() {
     return Steps(InAnyContext(ExecuteJsAt(kPopupWebView, kWebUIInput,
                                           R"(el => {
@@ -805,6 +829,8 @@ IN_PROC_BROWSER_TEST_F(FullWebUIOmniboxInteractiveTest,
       SendKeyPress(kBrowserViewElementId, ui::VKEY_RETURN,
                    ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN),
       WaitForWebContentsReady(kTab2),
+      // Verify popup remains open on Tab 1.
+      InAnyContext(WaitForShow(OmniboxPopupPresenter::kRoundedResultsFrame)),
       // Switch to the newly opened background tab (index 2).
       SelectTab(kTabStripElementId, 2), WaitForPopupTransitionLockout(),
       InAnyContext(WaitForHide(OmniboxPopupPresenter::kRoundedResultsFrame)),
@@ -827,6 +853,18 @@ IN_PROC_BROWSER_TEST_F(FullWebUIOmniboxInteractiveTest,
       InAnyContext(
           InstrumentNonTabWebView(kPopupWebView, GetActivePopupWebView())),
       CheckWebUIInputFocus(true));
+}
+
+// Verifies that copying text in the full WebUI Omnibox records the
+// Omnibox.CutOrCopyAllText metric.
+IN_PROC_BROWSER_TEST_F(FullWebUIOmniboxInteractiveTest, OnCopy) {
+  base::HistogramTester histogram_tester;
+  RunTestSequence(
+      OpenInitialTabAndFocusOmnibox(kTab1, GURL("chrome://version/")),
+      CopyWebUIText(), CheckWebUIInputFocus(true), Do([&]() {
+        histogram_tester.ExpectBucketCount(
+            OmniboxEditModel::kCutOrCopyAllTextHistogram, 1, 1);
+      }));
 }
 
 class FullWebUIOmniboxAimInteractiveTestBase

@@ -1357,7 +1357,7 @@ suite('NewTabPageAppTest', () => {
           NtpComposeboxElement.prototype.handleFuseboxAction = function(
               action: FuseboxAction) {
             handleFuseboxActionArg = action;
-            originalHandleFuseboxAction.call(this, action);
+            return originalHandleFuseboxAction.call(this, action);
           };
 
           const action: FuseboxAction = {
@@ -1452,11 +1452,15 @@ suite('NewTabPageAppTest', () => {
           app.shadowRoot.querySelector<NtpComposeboxElement>('#composebox');
       assertTrue(!!composebox);
       // 1. Setup: Simulate input content.
-      composebox.getInputElement().$.input.value = 'test input';
-      composebox.getInputElement().$.input.dispatchEvent(new Event('input'));
+      const input = composebox.getInputElement().$.input;
+      if ('value' in input) {
+        (input as HTMLTextAreaElement).value = 'test input';
+      }
+      input.innerText = 'test input';
+      input.dispatchEvent(new Event('input'));
       await microtasksFinished();
 
-      assertEquals('test input', composebox.getInputElement().$.input.value);
+      assertEquals('test input', composebox.input);
 
       // First ESC: Clear Input (Content present)
       const closePromise1 = eventToPromise('close-composebox', composebox);
@@ -1473,8 +1477,7 @@ suite('NewTabPageAppTest', () => {
           closedAfterFirstEsc,
           'First ESC should clear input, not close the box.');
       assertEquals(
-          '', composebox.getInputElement().$.input.value,
-          'Input must be cleared after first ESC.');
+          '', composebox.input, 'Input must be cleared after first ESC.');
 
       // Second ESC: Close Box (Content empty)
       // Act: Press ESC 2.
@@ -1919,6 +1922,44 @@ suite('NewTabPageAppTest', () => {
                             composeboxCenter.y})`);
               });
         });
+      });
+
+      [false, true].forEach(energyEffectAnimationEnabled => {
+        test(
+            `search-animated-glow background is aligned with inset 0 when energyEffectEnabled is true and energyEffectAnimationEnabled is ${
+                energyEffectAnimationEnabled}`,
+            async () => {
+              loadTimeData.overrideValues({
+                energyEffectEnabled: true,
+                energyEffectAnimationEnabled,
+              });
+              await recreateApp();
+              await microtasksFinished();
+
+              const searchbox = $$(app, '#searchbox');
+              assertTrue(!!searchbox);
+              searchbox.dispatchEvent(new CustomEvent('open-composebox', {
+                detail: {text: '', files: []},
+              }));
+              await microtasksFinished();
+
+              const composebox =
+                  app.shadowRoot.querySelector<NtpComposeboxElement>(
+                      '#composebox');
+              assertTrue(!!composebox);
+
+              const animatedGlow = $$(composebox, 'search-animated-glow');
+              assertTrue(!!animatedGlow);
+
+              const background = $$(animatedGlow, '.background');
+              assertTrue(!!background);
+
+              const bgStyle = window.getComputedStyle(background);
+              assertEquals('0px', bgStyle.top);
+              assertEquals('0px', bgStyle.left);
+              assertEquals('0px', bgStyle.right);
+              assertEquals('0px', bgStyle.bottom);
+            });
       });
 
       test(
@@ -2910,7 +2951,7 @@ suite('NewTabPageAppTest', () => {
           app.shadowRoot.querySelector<NtpComposeboxElement>('#composebox');
       assertTrue(!!composebox);
 
-      assertEquals('text', composebox.getInputElement().$.input.value);
+      assertEquals('text', composebox.input);
       assertStyle($$(app, '#searchbox')!, 'visibility', 'hidden');
     });
 
@@ -3200,7 +3241,7 @@ suite('NewTabPageAppTest', () => {
           assertEquals(1, tabId);
           assertEquals(true, delayUpload);
           assertTrue(!!composebox.getInputElement().$.input);
-          assertEquals(suggestion, composebox.getInputElement().$.input.value);
+          assertEquals(suggestion, composebox.input);
         });
     test(
         'Action chip click sets preselected model in composebox state',

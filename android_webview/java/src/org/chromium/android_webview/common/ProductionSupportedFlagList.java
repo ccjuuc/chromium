@@ -723,6 +723,9 @@ public final class ProductionSupportedFlagList {
                 "Register, unregister Battery Status Manager broadcast receiver on a background"
                         + " thread."),
         Flag.baseFeature(
+                BaseFeatures.PARTITION_ALLOC_WITH_ADVANCED_CHECKS,
+                "Enables PartitionAlloc with advanced safety checks"),
+        Flag.baseFeature(
                 BaseFeatures.PARTITION_ALLOC_SCHEDULER_LOOP_QUARANTINE,
                 "Enables PartitionAlloc's FreeFlags::kSchedulerLoopQuarantine"),
         Flag.baseFeature("PartitionAllocSchedulerLoopQuarantineTaskObserverForBrowserUIThread"),
@@ -1369,10 +1372,6 @@ public final class ProductionSupportedFlagList {
         Flag.baseFeature(
                 AwFeatures.WEBVIEW_CPP_METRICS_FILTERING,
                 "Enables WebView UMA metrics filtering in C++ instead of Java."),
-        Flag.baseFeature(
-                BlinkFeatures.SELECT_WEBVIEW_UNTRUSTED_EVENT_REMOVAL,
-                "Enables the removal of a WebView-specific hack to allow select elements to be"
-                        + " opened with untrusted mousedown events."),
         Flag.baseFeature(
                 "QuicIgnoreRedundantOnNetworkMadeDefault",
                 "When enabled, Quic will ignore redundant OnNetworkMadeDefault calls."),

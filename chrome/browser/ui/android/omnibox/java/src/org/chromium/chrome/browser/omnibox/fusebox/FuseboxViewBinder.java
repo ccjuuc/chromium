@@ -76,6 +76,8 @@ class FuseboxViewBinder {
         if (propertyKey == FuseboxProperties.ACTIVATION_CHIP_CLICKED) {
             view.activationChip.setOnClickListener(
                     v -> model.get(FuseboxProperties.ACTIVATION_CHIP_CLICKED).run());
+        } else if (propertyKey == FuseboxProperties.ACTIVATION_CHIP_COMPACT) {
+            view.activationChip.setIsCompact(model.get(FuseboxProperties.ACTIVATION_CHIP_COMPACT));
         } else if (propertyKey == FuseboxProperties.ACTIVATION_CHIP_SELECTED) {
             view.activationChip.setSelected(model.get(FuseboxProperties.ACTIVATION_CHIP_SELECTED));
         } else if (propertyKey == FuseboxProperties.ACTIVATION_CHIP_VISIBLE) {
@@ -577,7 +579,7 @@ class FuseboxViewBinder {
         }
     }
 
-    private static void updateNavigateButton(PropertyModel model, FuseboxViewHolder view) {
+    private void updateNavigateButton(PropertyModel model, FuseboxViewHolder view) {
         @BrandedColorScheme int brandedColorScheme = model.get(FuseboxProperties.COLOR_SCHEME);
         Context context = view.parentView.getContext();
         view.navigateButton
@@ -585,6 +587,7 @@ class FuseboxViewBinder {
                 .setTint(
                         OmniboxResourceProvider.getSendIconContrastColor(
                                 context, brandedColorScheme));
+        view.navigateButton.setBackground(mResourceProvider.getPopoverNavigateButtonBackground());
         @ColorInt
         int colorPrimary = OmniboxResourceProvider.getColorPrimary(context, brandedColorScheme);
         view.navigateButton.getBackground().setTint(colorPrimary);

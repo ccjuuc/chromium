@@ -29,10 +29,6 @@ namespace features {
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAbortNavigationsFromTabClosures);
 
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAndroidCaptureKeyEvents);
-#if BUILDFLAG(IS_MAC)
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kAperitifHelpers);
-#endif
-
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAndroidDevToolsFrontend);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(
     kAndroidEnableBackgroundMediaLargeFormFactors);
@@ -108,6 +104,7 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(
 CONTENT_EXPORT BASE_DECLARE_FEATURE(
     kClearCrossSiteCrossBrowsingContextGroupWindowName);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kCompositeBGColorAnimation);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kDeferSessionStorageScavengingOnStartup);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kDeferSpeculativeRFHCreation);
 CONTENT_EXPORT extern const base::FeatureParam<bool>
     kWarmupSpareProcessCreationWhenDeferRFH;

@@ -233,9 +233,6 @@ public class StripLayoutHelper
     static final String NULL_TAB_HOVER_CARD_VIEW_SHOW_DELAYED_HISTOGRAM_NAME =
             "Android.TabStrip.NullTabHoverCardView.ShowDelayed";
 
-    // Hover card constants
-    @VisibleForTesting static final int MAX_HOVER_CARD_DELAY_MS = 800;
-    @VisibleForTesting static final int MIN_HOVER_CARD_DELAY_MS = 300;
     private static final int SHOW_HOVER_CARD_WITHOUT_DELAY_TIME_BUFFER = 300;
 
     // An observer that is notified of changes to a {@link TabModel} object.
@@ -1957,6 +1954,23 @@ public class StripLayoutHelper
     }
 
     /**
+     * Called when a set of tabs are going to be closed.
+     *
+     * @param tabs The list of tabs being closed.
+     * @param isAllTabs Whether all tabs are closing.
+     * @param allowUndo Whether undo is allowed for this closure.
+     */
+    public void willCloseTabs(List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+        if (isAllTabs) {
+            willCloseAllTabs();
+            return;
+        }
+        for (Tab tab : tabs) {
+            willCloseTab(tab);
+        }
+    }
+
+    /**
      * Called when a tab close has been undone and the tab has been restored. This also re-selects
      * the last tab the user was on before the tab was closed.
      *
@@ -3096,33 +3110,7 @@ public class StripLayoutHelper
 
     @VisibleForTesting
     int getHoverCardDelay(float tabWidth) {
-        // Delay is calculated as a logarithmic scale and bounded by a minimum width
-        // based on the width of a pinned tab and a maximum of the standard width.
-        //
-        //  delay (ms)
-        //           |
-        // max delay-|                                    *
-        //           |                          *
-        //           |                    *
-        //           |                *
-        //           |            *
-        //           |         *
-        //           |       *
-        //           |     *
-        //           |    *
-        // min delay-|****
-        //           |___________________________________________ tab width
-        //               |                                |
-        //       pinned tab width               standard tab width
-
-        tabWidth = MathUtils.clamp(tabWidth, MIN_TAB_WIDTH_DP, MAX_TAB_WIDTH_DP);
-        double logarithmicFraction =
-                Math.log(tabWidth - MIN_TAB_WIDTH_DP + 1.f)
-                        / Math.log(MAX_TAB_WIDTH_DP - MIN_TAB_WIDTH_DP + 1.f);
-        int scalingFactor = MAX_HOVER_CARD_DELAY_MS - MIN_HOVER_CARD_DELAY_MS;
-        int delay = (int) (logarithmicFraction * scalingFactor) + MIN_HOVER_CARD_DELAY_MS;
-
-        return delay;
+        return TabHoverCardView.getHoverCardDelay(tabWidth, MIN_TAB_WIDTH_DP, MAX_TAB_WIDTH_DP);
     }
 
     private void showTabHoverCardView(boolean isDelayedCall) {

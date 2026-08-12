@@ -4,11 +4,15 @@
 
 #include "chrome/browser/ui/autofill/payments/wallet_reminder_notice_bubble_controller.h"
 
+#include <utility>
+
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace autofill {
 
@@ -31,6 +35,17 @@ WalletReminderNoticeBubbleController::From(tabs::TabInterface& tab_interface) {
   return Get(tab_interface.GetUnownedUserDataHost());
 }
 
+void WalletReminderNoticeBubbleController::Show(
+    LegalMessageLines legal_message_lines) {
+  // Don't show the bubble if it's already visible or not set up.
+  if (GetBubbleView() || !MaySetUpBubble()) {
+    return;
+  }
+  legal_message_lines_ = std::move(legal_message_lines);
+  is_reshow_ = false;
+  QueueOrShowBubble();
+}
+
 void WalletReminderNoticeBubbleController::ReshowBubble() {
   // Don't show the bubble if it's already visible.
   if (GetBubbleView()) {
@@ -38,6 +53,15 @@ void WalletReminderNoticeBubbleController::ReshowBubble() {
   }
   is_reshow_ = true;
   QueueOrShowBubble(/*force_show=*/true);
+}
+
+std::u16string WalletReminderNoticeBubbleController::GetWindowTitle() const {
+  return l10n_util::GetStringUTF16(IDS_AUTOFILL_WALLET_REMINDER_NOTICE_TITLE);
+}
+
+const LegalMessageLines&
+WalletReminderNoticeBubbleController::GetLegalMessageLines() const {
+  return legal_message_lines_;
 }
 
 AutofillBubbleBase* WalletReminderNoticeBubbleController::GetBubbleView()

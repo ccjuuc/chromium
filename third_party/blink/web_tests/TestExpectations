@@ -2450,9 +2450,6 @@ crbug.com/383880384 [ Win ] external/wpt/css/css-properties-values-api/registere
 
 [ Linux ] external/wpt/webdriver/tests/bidi/network/continue_response/cookies.py [ Failure Pass Timeout ]
 
-# Inheritance of zoom on non-inherited properties
-crbug.com/420443621 external/wpt/css/css-viewport/zoom/text-decoration-thickness.html [ Failure ]
-
 crbug.com/424798906 external/wpt/pointerevents/pointerevent_element_haspointercapture.html?touch [ Failure ]
 
 crbug.com/433565190 external/wpt/css/css-counter-styles/japanese-formal/counter-japanese-formal-extended.html [ Failure ]
@@ -3908,7 +3905,6 @@ crbug.com/356955226 virtual/fedcm-accounts-push/external/wpt/fedcm/fedcm-account
 crbug.com/353583104 [ Win11-arm64 ] external/wpt/html/semantics/embedded-content/media-elements/preserves-pitch.html [ Timeout ]
 crbug.com/353583105 [ Win11-arm64 ] virtual/fenced-frame-mparch/external/wpt/fenced-frame/config-cross-origin-apis.https.html [ Timeout ]
 crbug.com/353228155 [ Mac ] external/wpt/svg/text/reftests/textpath-letter-spacing-01.svg [ Failure ]
-crbug.com/352407781 external/wpt/svg/painting/reftests/non-scaling-stroke-003.html [ Failure ]
 crbug.com/352390127 [ Win11-arm64 ] external/wpt/webcodecs/video-encoder-config.https.any.worker.html [ Failure Timeout ]
 crbug.com/352177983 [ Win11-arm64 ] virtual/fenced-frame-mparch/external/wpt/fenced-frame/fence-report-event-cross-origin-urn-iframe-no-subframe-opt-in.https.html [ Timeout ]
 crbug.com/352088182 [ Win11-arm64 ] virtual/no-auto-wpt-origin-isolation/external/wpt/html/browsers/origin/origin-keyed-agent-clusters/going-back.sub.https.html [ Timeout ]
@@ -3977,8 +3973,6 @@ crbug.com/332933144 [ Mac14 ] external/wpt/fetch/api/response/response-clone.any
 crbug.com/332933144 [ Mac13 ] external/wpt/fetch/api/response/response-clone.any.serviceworker.html [ Failure Timeout ]
 crbug.com/332933144 [ Win11-arm64 ] external/wpt/fetch/api/response/response-clone.any.sharedworker.html [ Failure Timeout ]
 crbug.com/332933144 [ Win11-arm64 ] external/wpt/fetch/api/response/response-clone.any.worker.html [ Failure Timeout ]
-crbug.com/332572643 external/wpt/css/css-transforms/transform-iframe-scroll-position.html [ Failure ]
-crbug.com/332572643 virtual/backface-visibility-interop/external/wpt/css/css-transforms/transform-iframe-scroll-position.html [ Failure ]
 
 crbug.com/332345856 [ Win11-arm64 ] external/wpt/html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html [ Timeout ]
 crbug.com/331835714 [ Win11-arm64 ] external/wpt/webaudio/the-audio-api/the-audionode-interface/audionode.html [ Failure Timeout ]
@@ -5467,6 +5461,7 @@ crbug.com/1048761 external/wpt/websockets/constructor/018.html?wpt_flags=h2 [ Fa
 crbug.com/1048761 external/wpt/websockets/constructor/019.html?wpt_flags=h2 [ Failure ]
 crbug.com/1048761 external/wpt/websockets/constructor/020.html?wpt_flags=h2 [ Failure ]
 crbug.com/1048761 external/wpt/websockets/constructor/022.html?wpt_flags=h2 [ Failure ]
+crbug.com/1048761 external/wpt/websockets/constructor/023.html?wpt_flags=h2 [ Failure ]
 crbug.com/1048761 external/wpt/websockets/cookies/001.html?wpt_flags=h2 [ Failure ]
 crbug.com/1048761 external/wpt/websockets/cookies/002.html?wpt_flags=h2 [ Failure ]
 crbug.com/1048761 external/wpt/websockets/cookies/003.html?wpt_flags=h2 [ Failure ]
@@ -9175,7 +9170,6 @@ crbug.com/491563468 virtual/web-bluetooth-new-permissions-backend/external/wpt/b
 
 # [WebAudio] Expected to timeout or crash until Configurable Render Quantum is fully launched.
 crbug.com/502309240 external/wpt/webaudio/the-audio-api/rendersizehint-smoke-tests.https.html [ Crash Timeout ]
-crbug.com/502309240 external/wpt/webaudio/the-audio-api/the-convolvernode-interface/convolver-rendersizehint.https.html [ Crash Failure Timeout ]
 
 # Gardener 2026-05-18
 crbug.com/514075904 [ Win11-arm64 ] virtual/text-antialias/emphasis-complex.html [ Failure Pass ]

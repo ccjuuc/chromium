@@ -1406,6 +1406,32 @@ TEST_F(TabStripModelTest, UngroupingFocusedGroupUnsetsFocus) {
                                       1);
 }
 
+TEST_F(TabStripModelTest, InsertingDetachedTabGroupUnsetsFocus) {
+  TestTabStripModelDelegate delegate;
+  TabStripModel model(&delegate, profile());
+  ASSERT_TRUE(model.empty());
+
+  model.AppendWebContents(CreateWebContents(), true);
+  model.AppendWebContents(CreateWebContents(), true);
+
+  const tab_groups::TabGroupId group1 = model.AddToNewGroup({0, 1});
+  model.SetFocusedGroup(group1);
+  EXPECT_EQ(model.GetFocusedGroup(), group1);
+
+  TestTabStripModelDelegate delegate2;
+  TabStripModel model2(&delegate2, profile());
+  model2.AppendWebContents(CreateWebContents(), true);
+  model2.AppendWebContents(CreateWebContents(), true);
+  const tab_groups::TabGroupId group2 = model2.AddToNewGroup({0, 1});
+  std::unique_ptr<DetachedTabCollection> detached_group =
+      model2.DetachTabGroupForInsertion(group2);
+
+  model.InsertDetachedTabGroupAt(std::move(detached_group), 0);
+  EXPECT_EQ(model.GetFocusedGroup(), std::nullopt);
+  EXPECT_TRUE(model.group_model()->ContainsTabGroup(group1));
+  EXPECT_TRUE(model.group_model()->ContainsTabGroup(group2));
+}
+
 TEST_F(TabStripModelTest,
        ClosingLastTabOfFocusedGroupUnsetsFocusAndLogsHistogram) {
   TestTabStripModelDelegate delegate;
@@ -1486,11 +1512,6 @@ TEST_F(TabStripModelTest, FocusModeSessionDurationHistogramOnSwitchGroup) {
 
 TEST_F(TabStripModelTest,
        FocusModePinnedTabsUsageHistogramRecordedWhenPinnedTabsPresent) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      features::kTabGroupsFocusing,
-      {{features::kTabGroupsFocusingPinnedTabs.name, "true"}});
-
   TestTabStripModelDelegate delegate;
   TabStripModel model(&delegate, profile());
   base::HistogramTester histogram_tester;
@@ -1529,11 +1550,6 @@ TEST_F(TabStripModelTest,
 
 TEST_F(TabStripModelTest,
        FocusModePinnedTabsUsageHistogramZeroActivationsWhenUntouched) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      features::kTabGroupsFocusing,
-      {{features::kTabGroupsFocusingPinnedTabs.name, "true"}});
-
   TestTabStripModelDelegate delegate;
   TabStripModel model(&delegate, profile());
   base::HistogramTester histogram_tester;
@@ -1564,11 +1580,6 @@ TEST_F(TabStripModelTest,
 
 TEST_F(TabStripModelTest,
        FocusModePinnedTabsUsageHistogramRecordedWhenNoPinnedTabsPresent) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      features::kTabGroupsFocusing,
-      {{features::kTabGroupsFocusingPinnedTabs.name, "true"}});
-
   TestTabStripModelDelegate delegate;
   TabStripModel model(&delegate, profile());
   base::HistogramTester histogram_tester;
@@ -1597,11 +1608,6 @@ TEST_F(TabStripModelTest,
 
 TEST_F(TabStripModelTest,
        FocusModePinnedTabsUsageHistogramPinnedTabAddedDuringSession) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      features::kTabGroupsFocusing,
-      {{features::kTabGroupsFocusingPinnedTabs.name, "true"}});
-
   TestTabStripModelDelegate delegate;
   TabStripModel model(&delegate, profile());
   base::HistogramTester histogram_tester;
@@ -2719,13 +2725,7 @@ TEST_F(TabStripModelTest, CommandCloseTabsToRightInFocusedGroupOnly) {
   EXPECT_EQ(group_b, tabstrip()->GetTabGroupForTab(1));
 }
 
-TEST_F(TabStripModelTest,
-       SelectingPinnedTabPreservesFocusWhenPinnedTabsEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      features::kTabGroupsFocusing,
-      {{features::kTabGroupsFocusingPinnedTabs.name, "true"}});
-
+TEST_F(TabStripModelTest, SelectingPinnedTabPreservesFocus) {
   PrepareTabs(tabstrip(), 4);
   tabstrip()->SetTabPinned(0, true);
   tab_groups::TabGroupId group_id = tabstrip()->AddToNewGroup({1, 2});
@@ -2735,7 +2735,7 @@ TEST_F(TabStripModelTest,
   // Activate the pinned tab (index 0).
   tabstrip()->ActivateTabAt(0);
 
-  // Focus should be preserved because kTabGroupsFocusingPinnedTabs is enabled.
+  // Focus should be preserved.
   EXPECT_EQ(group_id, tabstrip()->GetFocusedGroup());
 }
 
@@ -5354,6 +5354,38 @@ TEST_F(TabStripModelTest, MultipleSelection) {
   tabstrip()->RemoveObserver(observer());
   observer()->ClearStates();
   tabstrip()->CloseAllTabs();
+}
+
+TEST_F(TabStripModelTest, RemoveAnchorTabReassignsToActiveTab) {
+  std::unique_ptr<WebContents> contents0 = CreateWebContentsWithID(0);
+  std::unique_ptr<WebContents> contents1 = CreateWebContentsWithID(1);
+  std::unique_ptr<WebContents> contents2 = CreateWebContentsWithID(2);
+  std::unique_ptr<WebContents> contents3 = CreateWebContentsWithID(3);
+
+  tabstrip()->AppendWebContents(std::move(contents0), true);
+  tabstrip()->AppendWebContents(std::move(contents1), false);
+  tabstrip()->AppendWebContents(std::move(contents2), false);
+  tabstrip()->AppendWebContents(std::move(contents3), false);
+
+  // Activate Tab 3 (index 3).
+  tabstrip()->ActivateTabAt(3);
+
+  // Extend selection to Tab 0 (index 0).
+  tabstrip()->ExtendSelectionTo(0);
+
+  EXPECT_EQ(0, tabstrip()->active_index());
+  EXPECT_EQ(
+      3, tabstrip()->GetIndexOfTab(tabstrip()->selection_model().anchor_tab()));
+  EXPECT_NE(tabstrip()->selection_model().active_tab(),
+            tabstrip()->selection_model().anchor_tab());
+
+  // Close Tab 3 (the anchor tab) while Tab 0 remains active.
+  tabstrip()->CloseWebContentsAt(3, TabCloseTypes::CLOSE_NONE);
+
+  EXPECT_NE(nullptr, tabstrip()->selection_model().anchor_tab());
+  EXPECT_EQ(tabstrip()->selection_model().active_tab(),
+            tabstrip()->selection_model().anchor_tab());
+  EXPECT_TRUE(tabstrip()->selection_model().Valid());
 }
 
 // Verifies that if we change the selection from a multi selection to a single

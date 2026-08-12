@@ -161,7 +161,6 @@ import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
 import org.chromium.chrome.browser.tabmodel.TabCreatorUtil;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.tabstrip.TabStripTopControlLayer;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupUi;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupUiOneshotSupplier;
@@ -350,7 +349,6 @@ public class ToolbarManager
             ObservableSuppliers.createMonotonic();
     private @MonotonicNonNull TabModelSelector mTabModelSelector;
     private final Callback<TabModel> mCurrentTabModelObserver;
-    private TabModelSelectorObserver mTabModelSelectorObserver;
     private MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
     private ActivityTabProvider.ActivityTabTabObserver mActivityTabTabObserver;
     private final ActivityTabProvider mActivityTabProvider;
@@ -623,13 +621,17 @@ public class ToolbarManager
                 return;
             }
 
-            mHandler.onBackProgressed(
+            if (!mHandler.onBackProgressed(
                     backEvent.getProgress(),
                     backEvent.getSwipeEdge() == BackEventCompat.EDGE_LEFT
                             ? BackGestureEventSwipeEdge.LEFT
                             : BackGestureEventSwipeEdge.RIGHT,
                     isForward(),
-                    mIsGestureMode);
+                    mIsGestureMode)) {
+                // The gesture is ours again, so handleBackPress() must fall back to the
+                // regular back handling instead of waiting for a transition.
+                mHandler = null;
+            }
         }
 
         @Override
@@ -2580,14 +2582,6 @@ public class ToolbarManager
         mUndoBarThrottle = undoBarThrottle;
 
         mTabModelSelector = tabModelSelector;
-        mTabModelSelectorObserver =
-                new TabModelSelectorObserver() {
-                    @Override
-                    public void onTabHidden(Tab tab) {
-                        suspendFuseboxInput();
-                    }
-                };
-        mTabModelSelector.addObserver(mTabModelSelectorObserver);
         if (mActionRegistry != null) {
             PropertyModel newTabModel = mActionRegistry.get(ActionId.NEW_TAB).get();
             assert newTabModel != null : "NEW_TAB action should be registered";
@@ -2903,9 +2897,6 @@ public class ToolbarManager
         }
         if (mTabModelSelectorSupplier != null) {
             mTabModelSelectorSupplier = null;
-        }
-        if (mTabModelSelectorObserver != null) {
-            mTabModelSelector.removeObserver(mTabModelSelectorObserver);
         }
         if (mTabModelSelector != null) {
             mTabModelSelector.getCurrentTabModelSupplier().removeObserver(mCurrentTabModelObserver);

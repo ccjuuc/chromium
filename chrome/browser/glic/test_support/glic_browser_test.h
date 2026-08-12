@@ -85,6 +85,11 @@
 namespace glic {
 
 #if BUILDFLAG(IS_ANDROID)
+void SetActivityOrientationForTesting(content::WebContents* web_contents,
+                                      int orientation);
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
 #define SKIP_TEST_FOR_NON_DESKTOP_ANDROID()            \
   if (!base::android::device_info::is_desktop()) {     \
     GTEST_SKIP() << "Skipping on non-desktop Android"; \
@@ -655,6 +660,27 @@ class GlicBrowserTestMixin : public T {
   tabs::TabInterface* CreateAndActivateTab(BrowserWindowInterface* browser,
                                            const GURL& url) {
     return CreateAndActivateTab(TabListInterface::From(browser), url);
+  }
+
+  // Opens a new background tab with the given URL and waits for load to
+  // complete.
+  tabs::TabInterface* CreateBackgroundTab(TabListInterface* tab_list,
+                                          const GURL& url) {
+    CHECK(tab_list);
+    tabs::TabInterface* new_tab =
+        tab_list->OpenTab(url, -1, /*foreground=*/false);
+    CHECK(new_tab);
+    CHECK(content::WaitForLoadStop(new_tab->GetContents()));
+    return new_tab;
+  }
+
+  tabs::TabInterface* CreateBackgroundTab(const GURL& url) {
+    return CreateBackgroundTab(T::GetTabListInterface(), url);
+  }
+
+  tabs::TabInterface* CreateBackgroundTab(BrowserWindowInterface* browser,
+                                          const GURL& url) {
+    return CreateBackgroundTab(TabListInterface::From(browser), url);
   }
 
   // Creates a new browser window and returns it. On Desktop, it will also

@@ -11,9 +11,12 @@
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/test_browser_window.h"
+#include "components/autofill/core/browser/payments/test_legal_message_line.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/tabs/public/mock_tab_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
 namespace autofill {
@@ -86,6 +89,17 @@ TEST_F(WalletReminderNoticeBubbleControllerTest, From) {
             controller_.get());
 }
 
+TEST_F(WalletReminderNoticeBubbleControllerTest, Show_ShowsBubble) {
+  EXPECT_CALL(test_browser_window_.mock_autofill_bubble_handler(),
+              ShowWalletReminderNoticeBubble(web_contents(), controller_.get(),
+                                             /*is_user_gesture=*/false))
+      .WillOnce(testing::Return(&test_bubble_));
+
+  EXPECT_EQ(controller_->GetBubbleView(), nullptr);
+  controller_->Show({TestLegalMessageLine("Line 1")});
+  EXPECT_EQ(controller_->GetBubbleView(), &test_bubble_);
+}
+
 TEST_F(WalletReminderNoticeBubbleControllerTest, ReshowBubble_ShowsBubble) {
   EXPECT_CALL(test_browser_window_.mock_autofill_bubble_handler(),
               ShowWalletReminderNoticeBubble(web_contents(), controller_.get(),
@@ -95,6 +109,21 @@ TEST_F(WalletReminderNoticeBubbleControllerTest, ReshowBubble_ShowsBubble) {
   EXPECT_EQ(controller_->GetBubbleView(), nullptr);
   controller_->ReshowBubble();
   EXPECT_EQ(controller_->GetBubbleView(), &test_bubble_);
+}
+
+TEST_F(WalletReminderNoticeBubbleControllerTest, GetWindowTitle) {
+  EXPECT_EQ(
+      controller_->GetWindowTitle(),
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_WALLET_REMINDER_NOTICE_TITLE));
+}
+
+TEST_F(WalletReminderNoticeBubbleControllerTest, GetLegalMessageLines) {
+  LegalMessageLines legal_message_lines = {TestLegalMessageLine("Line 1."),
+                                           TestLegalMessageLine("Line 2.")};
+
+  EXPECT_TRUE(controller_->GetLegalMessageLines().empty());
+  controller_->Show(legal_message_lines);
+  EXPECT_EQ(controller_->GetLegalMessageLines(), legal_message_lines);
 }
 
 TEST_F(WalletReminderNoticeBubbleControllerTest, GetBubbleType) {

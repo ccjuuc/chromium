@@ -875,10 +875,6 @@ inline constexpr char kGeminiFRERefactorName[] = "Gemini FRE Refactor";
 inline constexpr char kGeminiFRERefactorDescription[] =
     "Enables the refactored Gemini First Run Experience UI.";
 
-inline constexpr char kGeminiImageRemixToolName[] = "Gemini Image Remix Tool";
-inline constexpr char kGeminiImageRemixToolDescription[] =
-    "Enables the image remix tool in the Gemini floaty.";
-
 inline constexpr char kGeminiLiveDormantReasonsName[] =
     "Gemini Live Dormant Reasons";
 inline constexpr char kGeminiLiveDormantReasonsDescription[] =
@@ -1680,11 +1676,6 @@ inline constexpr char kPageContentAnnotationsName[] =
 inline constexpr char kPageContentAnnotationsDescription[] =
     "Enables page content to be annotated on-device.";
 
-inline constexpr char kPageContentAnnotationsRemotePageMetadataName[] =
-    "Page content annotations - Remote page metadata";
-inline constexpr char kPageContentAnnotationsRemotePageMetadataDescription[] =
-    "Enables fetching of page load metadata to be persisted on-device.";
-
 inline constexpr char kPageContextIPCOptimizationName[] =
     "PageContextIPCOptimization";
 inline constexpr char kPageContextIPCOptimizationDescription[] =
@@ -1693,10 +1684,6 @@ inline constexpr char kPageContextIPCOptimizationDescription[] =
 inline constexpr char kPageContextPdfName[] = "Page Context PDF";
 inline constexpr char kPageContextPdfDescription[] =
     "Enables PDF support for Page Context in Gemini.";
-
-inline constexpr char kPageStabilityMetricsName[] = "Page Stability Metrics";
-inline constexpr char kPageStabilityMetricsDescription[] =
-    "Enables metrics to track DOM mutation frequency after user interactions.";
 
 inline constexpr char kPageToolsFeatureUnavailabilityName[] =
     "PageToolsFeatureUnavailability";
@@ -1740,6 +1727,12 @@ inline constexpr char kPlusButtonInFakeboxName[] =
 inline constexpr char kPlusButtonInFakeboxDescription[] =
     "When enabled, the fakebox NTP can contain a plus button for multimodal "
     "actions";
+
+inline constexpr char kPrepopulatedEnginesShadowVariantsName[] =
+    "Prepopulated Engines Shadow Variants";
+inline constexpr char kPrepopulatedEnginesShadowVariantsDescription[] =
+    "Enables shadow variants for prepopulated engines resolution, allowing "
+    "alternative engines to be resolved in specific regions.";
 
 inline constexpr char kPriceTrackingPromoName[] =
     "Enables price tracking notification promo card";

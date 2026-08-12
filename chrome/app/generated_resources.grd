@@ -19228,10 +19228,13 @@ Please help our engineers fix this problem. Tell us what happened right before y
       </message>
       <!-- Dictation strings -->
       <message name="IDS_DICTATION_ONBOARDING_BULLET_DATA_SHARING" desc="The second paragraph in the onboarding dialog describing data sharing with Google servers." translateable="false">
-        Your spoken audio, the transcribed text, and the content and URL of the page you're interacting with will be sent to Google.
+        The content and URL of the page you're on will be sent to Google to generate text based on your spoken audio and the page context.
       </message>
       <message name="IDS_DICTATION_ONBOARDING_BUTTON_ACCEPT" desc="Button label on the onboarding dialog to confirm the provided information and use the feature." translateable="false">
-        Ok, got it
+        Allow
+      </message>
+      <message name="IDS_DICTATION_ONBOARDING_BUTTON_CANCEL" desc="Button label on the onboarding dialog to cancel the provided information and not use the feature." translateable="false">
+        Cancel
       </message>
       <message name="IDS_DICTATION_BUTTON_START" desc="Button label on the dictation UI that turns on the microphone to start dictating text." translateable="false">
         Start
@@ -19253,6 +19256,17 @@ Please help our engineers fix this problem. Tell us what happened right before y
     <!-- Infobar shown when Protected Audiences Debugging is enabled -->
     <message name="IDS_PROTECTED_AUDIENCE_DEBUGGING_DISCLAIMER" desc="Text of infobar that shows up when the consented debugging feature for Protected Audiences is enabled.">
       Protected Audiences Debugging is enabled.
+    </message>
+
+    <!-- Omnibox Everywhere Screenshot Menu -->
+    <message name="IDS_OMNIBOX_EVERYWHERE_SHARE_SCREENSHOT" desc="Title of the screenshot sharing menu option.">
+      Share a screenshot
+    </message>
+    <message name="IDS_OMNIBOX_EVERYWHERE_ENTIRE_SCREEN" desc="Label of the option to capture an entire screen screenshot.">
+      Entire screen
+    </message>
+    <message name="IDS_OMNIBOX_EVERYWHERE_WINDOW" desc="Label of the option to capture a window screenshot.">
+      Window
     </message>
 
     <!-- Responsive Toolbar -->

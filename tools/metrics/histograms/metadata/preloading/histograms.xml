@@ -22,6 +22,7 @@ chromium-metrics-reviews@google.com.
 
 <variants name="ChromeInitiatorLocation">
   <variant name="BookmarkBar" summary="Initiated from BookmarkBar"/>
+  <variant name="LinkClick" summary="Initiated by a link click"/>
   <variant name="NewTabPage" summary="Initiated from NewTabPage"/>
   <variant name="OmniboxDefaultSearchEngine"
       summary="Initiated from OmniboxDefaultSearchEngine"/>
@@ -241,7 +242,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Preloading.Predictor.{PreloadingPredictor}.Precision"
-    enum="PredictorConfusionMatrix" expires_after="2026-11-29">
+    enum="PredictorConfusionMatrix" expires_after="2027-02-07">
   <owner>isaboori@google.com</owner>
   <owner>spelchat@chromium.org</owner>
   <owner>sreejakshetty@chromium.org</owner>
@@ -258,7 +259,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Preloading.Predictor.{PreloadingPredictor}.Recall"
-    enum="PredictorConfusionMatrix" expires_after="2026-11-29">
+    enum="PredictorConfusionMatrix" expires_after="2027-02-07">
   <owner>isaboori@google.com</owner>
   <owner>spelchat@chromium.org</owner>
   <owner>sreejakshetty@chromium.org</owner>
@@ -276,7 +277,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Preloading.Prefetch.PrefetchDataPipeTeeCloneFailed.{PrefetchDataPipeTeeStateLoadingOrSizeExceeded}"
-    units="count" expires_after="2026-11-29">
+    units="count" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -399,7 +400,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Preloading.{PreloadingType}.Attempt.{PreloadingPredictor}.Recall"
-    enum="PredictorConfusionMatrix" expires_after="2026-11-29">
+    enum="PredictorConfusionMatrix" expires_after="2027-02-07">
   <owner>isaboori@google.com</owner>
   <owner>spelchat@chromium.org</owner>
   <owner>sreejakshetty@chromium.org</owner>
@@ -420,7 +421,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Preloading.{PreloadingType}.Attempt.{PreloadingPredictor}.TriggeringOutcome"
-    enum="PreloadingTriggeringOutcome" expires_after="2026-11-29">
+    enum="PreloadingTriggeringOutcome" expires_after="2027-02-07">
   <owner>spelchat@chromium.org</owner>
   <owner>sreejakshetty@chromium.org</owner>
   <owner>jbroman@chromium.org</owner>
@@ -450,7 +451,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="PreloadServingMetrics.{ChromeInitiatorLocation}.{NavigationDestinationSuffix}"
-    enum="UsedInstantLoad" expires_after="2026-12-01">
+    enum="UsedInstantLoad" expires_after="2027-02-07">
   <owner>robertlin@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -465,7 +466,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.ActualMatchThen.TimeFromPrefetchContainerAddedToMatchStart"
-    units="ms" expires_after="2026-11-29">
+    units="ms" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -480,7 +481,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.Count"
-    units="count" expires_after="2026-11-29">
+    units="count" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -493,7 +494,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.ExistsPaop"
-    units="bool" expires_after="2026-12-06">
+    units="bool" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -526,7 +527,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.ExistsPaopThen.PotentialCandidateServingResultAndServableStateAndMatcherAction"
-    units="code" expires_after="2026-12-06">
+    units="code" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -542,7 +543,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.ExistsPaopThen.PrefetchStatus"
-    enum="PrefetchStatus" expires_after="2026-12-06">
+    enum="PrefetchStatus" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -557,7 +558,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.ExistsPaopThen.QueueIndexPlus1"
-    units="count" expires_after="2026-12-06">
+    units="count" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -573,7 +574,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.ExistsPaopThen.QueueSize"
-    units="count" expires_after="2026-12-06">
+    units="count" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -588,7 +589,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.ExistsPaopThen.ServableStateAndMatcherAction"
-    units="code" expires_after="2026-12-06">
+    units="code" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -604,7 +605,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.IsPotentialMatch"
-    units="bool" expires_after="2026-11-29">
+    units="bool" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -619,7 +620,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.IsPotentialMatch.WithAheadOfPrerender"
-    units="bool" expires_after="2026-11-29">
+    units="bool" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -635,7 +636,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.PotentialMatchThen.IsActualMatch"
-    units="bool" expires_after="2026-11-29">
+    units="bool" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -666,7 +667,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.PotentialMatchThen.NumberOfInitialCandidates"
-    units="count" expires_after="2026-11-29">
+    units="count" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -682,7 +683,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.PotentialMatchThen.NumberOfInitialCandidatesBlockUntilHead"
-    units="count" expires_after="2026-11-29">
+    units="count" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -698,7 +699,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.PotentialMatchThen.PotentialCandidateServingResult.Last"
-    enum="PrefetchPotentialCandidateServingResult" expires_after="2026-11-29">
+    enum="PrefetchPotentialCandidateServingResult" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>
@@ -714,7 +715,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="{PreloadServingMetricsPrefix}.PrefetchMatchMetrics.PotentialMatchThen.WithAheadOfPrerender.PotentialCandidateServingResult"
-    enum="PrefetchPotentialCandidateServingResult" expires_after="2026-11-29">
+    enum="PrefetchPotentialCandidateServingResult" expires_after="2027-02-07">
   <owner>kenoss@chromium.org</owner>
   <owner>chrome-prerendering@google.com</owner>
   <summary>

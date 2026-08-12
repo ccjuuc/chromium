@@ -139,6 +139,14 @@ AtMemoryQueryService* AutofillClient::GetAtMemoryQueryService() {
   return nullptr;
 }
 
+AtMemoryManager* AutofillClient::GetAtMemoryManager() {
+  return nullptr;
+}
+
+const AtMemoryManager* AutofillClient::GetAtMemoryManager() const {
+  return const_cast<AutofillClient*>(this)->GetAtMemoryManager();
+}
+
 personal_context::PersonalContextEligibilityState
 AutofillClient::GetPersonalContextEligibilityState() const {
   return personal_context::PersonalContextEligibilityState::
@@ -272,6 +280,14 @@ void AutofillClient::HideAmbientAutoFillNotice() {}
 AutofillSnackbarControllerImpl*
 AutofillClient::GetAutofillSnackbarController() {
   return nullptr;
+}
+
+void AutofillClient::ShowAutofillAiLoadingDialog() {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::DismissAutofillAiLoadingDialog() {
+  NOTIMPLEMENTED();
 }
 #endif
 

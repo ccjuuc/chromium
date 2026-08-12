@@ -713,18 +713,18 @@ void MaybeShowNavigationCaptureIph(webapps::AppId app_id,
       browser, profile, app_id);
 }
 
-Browser::CreateParams CreateParamsForApp(const webapps::AppId& app_id,
-                                         bool is_popup,
-                                         bool trusted_source,
-                                         const gfx::Rect& window_bounds,
-                                         Profile* profile,
-                                         bool user_gesture) {
+BrowserWindowCreateParams CreateParamsForApp(const webapps::AppId& app_id,
+                                             bool is_popup,
+                                             bool trusted_source,
+                                             const gfx::Rect& window_bounds,
+                                             Profile* profile,
+                                             bool user_gesture) {
   std::string app_name = GenerateApplicationNameFromAppId(app_id);
-  Browser::CreateParams params =
+  BrowserWindowCreateParams params =
       is_popup
-          ? Browser::CreateParams::CreateForAppPopup(
+          ? BrowserWindowCreateParams::CreateForAppPopup(
                 app_name, trusted_source, window_bounds, profile, user_gesture)
-          : Browser::CreateParams::CreateForApp(
+          : BrowserWindowCreateParams::CreateForApp(
                 app_name, trusted_source, window_bounds, profile, user_gesture);
   params.initial_show_state = IsRunningInForcedAppMode()
                                   ? ui::mojom::WindowShowState::kFullscreen
@@ -732,34 +732,17 @@ Browser::CreateParams CreateParamsForApp(const webapps::AppId& app_id,
   return params;
 }
 
-Browser* CreateWebAppWindowMaybeWithHomeTab(
-    const webapps::AppId& app_id,
-    const Browser::CreateParams& params) {
-  CHECK(params.type == Browser::Type::TYPE_APP_POPUP ||
-        params.type == Browser::Type::TYPE_APP);
-  BrowserWindowCreateParams create_params =
-      params.type == BrowserWindowInterface::Type::TYPE_APP_POPUP
-          ? BrowserWindowCreateParams::CreateForAppPopup(
-                params.app_name, params.trusted_source, params.initial_bounds,
-                params.profile, params.user_gesture)
-          : BrowserWindowCreateParams::CreateForApp(
-                params.app_name, params.trusted_source, params.initial_bounds,
-                params.profile, params.user_gesture);
-#if BUILDFLAG(IS_CHROMEOS)
-  create_params.restore_id = params.restore_id;
-#endif
-  create_params.initial_show_state = params.initial_show_state;
-  create_params.can_resize = params.can_resize;
-  create_params.can_maximize = params.can_maximize;
-  create_params.can_fullscreen = params.can_fullscreen;
-  create_params.omit_from_session_restore = params.omit_from_session_restore;
-  create_params.should_trigger_session_restore =
-      params.should_trigger_session_restore;
-  Browser* browser = CreateBrowserWindow(std::move(create_params))
-                         ->GetBrowserForMigrationOnly();
+Browser* CreateWebAppWindowMaybeWithHomeTab(const webapps::AppId& app_id,
+                                            BrowserWindowCreateParams params) {
+  CHECK(params.type == BrowserWindowInterface::Type::TYPE_APP_POPUP ||
+        params.type == BrowserWindowInterface::Type::TYPE_APP);
+  const bool is_popup =
+      params.type == BrowserWindowInterface::Type::TYPE_APP_POPUP;
+  Browser* browser =
+      CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly();
   CHECK(GenerateApplicationNameFromAppId(app_id) ==
         BrowserInitState::From(browser)->create_params().app_name);
-  if (params.type != Browser::Type::TYPE_APP_POPUP) {
+  if (!is_popup) {
     MaybeAddPinnedHomeTab(browser, app_id);
   }
   return browser;
@@ -898,7 +881,7 @@ void LaunchWebApp(apps::AppLaunchParams params,
   content::WebContents* web_contents = nullptr;
   // Do not launch anything if the profile is being deleted.
   if (GetBrowserWindowCreationStatusForProfile(profile) ==
-      Browser::CreationStatus::kOk) {
+      BrowserWindowInterface::CreationStatus::kOk) {
     // TODO(crbug.com/379136842): This is likely too 'permissive' of a check,
     // and different more restrictive filter should likely be used instead.
     if (lock.registrar().AppMatches(params.app_id,

@@ -192,6 +192,8 @@ bool RemoteActorCredentialSharingEnabled() {
 // Controls the enablement of structured metrics on Windows, Linux, and Mac.
 BASE_FEATURE(kChromeStructuredMetrics, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kDeferSpellcheckInitialization, base::FEATURE_DISABLED_BY_DEFAULT);
+
 // Moves the Extensions "puzzle piece" icon from the title bar into the app menu
 // for web app windows.
 BASE_FEATURE(kDesktopPWAsElidedExtensionsMenu,
@@ -1636,6 +1638,18 @@ const base::FeatureParam<base::TimeDelta> kSCTLogMaxIngestionRandomDelay{
 // down, and retry indefinitely (crbug.com/484218883). The boost is dropped once
 // the worker reaches RUNNING or stops.
 BASE_FEATURE(kServiceWorkerForegroundOnExtensionStartup,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, a performance manager voter keeps the renderer process of an
+// extension service worker at foreground priority for as long as the worker
+// lives, but only when the extension holds the `webRequestBlocking` permission.
+// Those workers synchronously gate navigations and network requests, so letting
+// their process drop to background priority (EcoQoS on Windows) stalls the
+// browsing session (crbug.com/484218883). This is the narrowly scoped
+// counterpart to performance_manager::features::kExtensionServiceWorkerVoter,
+// which boosts every extension service worker and regressed performance metrics
+// (crbug.com/493556675).
+BASE_FEATURE(kExtensionServiceWorkerPriorityVoter,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Alternative to switches::kSitePerProcess, for turning on full site isolation.

@@ -348,12 +348,24 @@ BASE_FEATURE(kAutofillAiShipment, base::FEATURE_ENABLED_BY_DEFAULT);
 // via a dialog instead of a snackbar.
 BASE_FEATURE(kAutofillAiShowDialogInSettingsWhenUpstreamingFails,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+// If enabled, a loading dialog is shown to the user during the time their data
+// is fetched from the server.
+BASE_FEATURE(kAutofillAiShowPersonalContextFillingYourInfoDialog,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
 // Controls whether a banner is shown in settings when wallet data sharing is
 // disabled.
 BASE_FEATURE(kAutofillAiShowWalletDisabledBanner,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+// If enabled, the entity editor on Android uses the date picker from the
+// material design library instead of the ad-hoc date picker implementation.
+BASE_FEATURE(kAutofillAiUseMaterialDatePickerInEntityEditor,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // If enabled, the client may trigger the server model for AutofillAI type
 // predictions using Private AI Compute.
@@ -449,6 +461,11 @@ BASE_FEATURE_PARAM(base::TimeDelta,
 // Controls whether pContext suggestion suppression in Ambient Autofill is
 // enabled.
 BASE_FEATURE(kAutofillAmbientAutofillSuppression,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// When enabled, Personal Context Autofill AI suggestions display UI to
+// suppress the suggestion.
+BASE_FEATURE(kAutofillAmbientAutofillSuppressionUI,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // If enabled, on Android desktop, the Autofill keyboard accessory will have a
@@ -664,6 +681,12 @@ BASE_FEATURE(kAutofillEnableDeduplicationOnBackgroundThread,
 // maximum number of entries.
 BASE_FEATURE(kAutofillEnableEntryLimitInPopup,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, IBAN regex pattern matching is expanded to support more
+// formats.
+BASE_FEATURE(kAutofillEnableExpandIbanRegexPattern,
+             "AutofillEnableExpandIbanRegexPattern",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables a couple of improvements to credit card expiration date handling:
 // - The autocomplete attribute values are rationalized with format strings

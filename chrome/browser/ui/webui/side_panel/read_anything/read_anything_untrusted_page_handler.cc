@@ -531,6 +531,13 @@ bool ReadAnythingUntrustedPageHandler::AreInnerContentsPdfContent(
 #endif
 }
 
+bool ReadAnythingUntrustedPageHandler::IsGoogleDocs(const GURL& url) const {
+  return url.SchemeIsHTTPOrHTTPS() &&
+         (url.DomainIs("docs.google.com") ||
+          url.DomainIs("docs.sandbox.google.com")) &&
+         url.GetPath().starts_with("/document");
+}
+
 void ReadAnythingUntrustedPageHandler::WebContentsDestroyed() {
   translate_observation_.Reset();
   audible_closure_.RunAndReset();
@@ -876,19 +883,6 @@ void ReadAnythingUntrustedPageHandler::OnLetterSpaceChange(
       std::to_underlying(letter_spacing));
 }
 void ReadAnythingUntrustedPageHandler::OnFontChange(const std::string& font) {
-  if (features::IsReadAnythingImprovedUiEnabled()) {
-    PrefService* prefs = profile_->GetPrefs();
-    prefs->SetString(prefs::kAccessibilityReadAnythingFontName, font);
-    ScopedListPrefUpdate update(
-        prefs, prefs::kAccessibilityReadAnythingRecentlyUsedFonts);
-    base::ListValue& list = update.Get();
-    list.EraseValue(base::Value(font));
-    list.Insert(list.begin(), base::Value(font));
-    if (list.size() > kReadAnythingMaxRecentFonts) {
-      list.resize(kReadAnythingMaxRecentFonts);
-    }
-    return;
-  }
   profile_->GetPrefs()->SetString(prefs::kAccessibilityReadAnythingFontName,
                                   font);
 }
@@ -1569,8 +1563,13 @@ void ReadAnythingUntrustedPageHandler::OnActiveAXTreeIDChanged() {
   // with the TS text segmentation method. Therefore, it doesn't work with
   // Readability. Until phrase highlighting works with TSTextSegmentation,
   // default to using Screen2x when the phrase highlighting flag is enabled.
+  // Google Docs enforces a strict TrustedHTML Content Security Policy that
+  // causes Readability script injection to fail. Avoid requesting Readability
+  // distillation when on Google Docs so the renderer can fall back cleanly to
+  // Screen2x.
   const bool use_readability =
       features::IsReadAnythingWithReadabilityEnabled() && !is_pdf_with_frame_ &&
+      !IsGoogleDocs(contents->GetLastCommittedURL()) &&
       !features::IsReadAnythingReadAloudPhraseHighlightingEnabled();
 
   if (use_readability) {
@@ -1602,7 +1601,8 @@ void ReadAnythingUntrustedPageHandler::RequestDomDistillerDistillation(
     content::WebContents* content) {
   if (!features::IsReadAnythingWithReadabilityEnabled() ||
       features::IsReadAnythingReadAloudPhraseHighlightingEnabled() ||
-      is_pdf_with_frame_) {
+      is_pdf_with_frame_ ||
+      (content && IsGoogleDocs(content->GetLastCommittedURL()))) {
     return;
   }
 
@@ -1950,21 +1950,6 @@ void ReadAnythingUntrustedPageHandler::RestoreSettingsFromPrefs() {
           ? static_cast<read_anything::mojom::LineFocus>(prefs->GetInteger(
                 prefs::kAccessibilityReadAnythingLastNonDisabledLineFocus))
           : read_anything::mojom::LineFocus::kDefaultValue;
-  std::vector<std::string> recently_used_fonts;
-  if (features::IsReadAnythingImprovedUiEnabled()) {
-    const base::ListValue& recent_fonts_list =
-        prefs->GetList(prefs::kAccessibilityReadAnythingRecentlyUsedFonts);
-    recently_used_fonts.reserve(
-        std::min(recent_fonts_list.size(), kReadAnythingMaxRecentFonts));
-    for (const auto& item : recent_fonts_list) {
-      if (recently_used_fonts.size() >= kReadAnythingMaxRecentFonts) {
-        break;
-      }
-      if (item.is_string() && !item.GetString().empty()) {
-        recently_used_fonts.push_back(item.GetString());
-      }
-    }
-  }
 
   page_->OnSettingsRestoredFromPrefs(
       static_cast<read_anything::mojom::LineSpacing>(
@@ -1982,8 +1967,7 @@ void ReadAnythingUntrustedPageHandler::RestoreSettingsFromPrefs() {
       prefs->GetList(prefs::kAccessibilityReadAnythingLanguagesEnabled).Clone(),
       static_cast<read_anything::mojom::HighlightGranularity>(prefs->GetDouble(
           prefs::kAccessibilityReadAnythingHighlightGranularity)),
-      last_non_disabled_line_focus, line_focus_enabled,
-      std::move(recently_used_fonts));
+      last_non_disabled_line_focus, line_focus_enabled);
 }
 
 void ReadAnythingUntrustedPageHandler::

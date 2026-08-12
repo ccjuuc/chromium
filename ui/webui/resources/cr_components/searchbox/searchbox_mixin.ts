@@ -248,14 +248,14 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
             shiftKey: e.shiftKey,
           },
           /*viaKeyboard=*/ e instanceof KeyboardEvent);
-      this.getInputElement().setInput({
-        text: this.computeMatchFillIntoEdit_(match),
-        inline: '',
-        moveCursorToEnd: true,
-      });
-      const isBackgroundTab = this.isBackgroundTabNavigation(e);
 
+      const isBackgroundTab = this.isBackgroundTabNavigation(e);
       if (!isBackgroundTab) {
+        this.getInputElement().setInput({
+          text: this.computeMatchFillIntoEdit_(match),
+          inline: '',
+          moveCursorToEnd: true,
+        });
         this.clearAutocompleteMatches();
       }
       e.preventDefault();
@@ -382,7 +382,8 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
         return;
       }
 
-      if (this.lastQueriedInput === '') {
+      if (this.lastQueriedInput === '' &&
+          this.inputKeywordModel?.type !== KeywordType.kInKeyword) {
         // Clear the input as well as the matches if the input was empty when
         // the matches arrived.
         this.getInputElement().setInput({text: '', inline: ''});
